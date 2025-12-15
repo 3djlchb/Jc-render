@@ -14,7 +14,7 @@ if sys.platform == "win32":
 
 setup(
     name="jc_render_app",
-    version="1.0",
+    version="0.1.2",
     description="Aplicación de Render de Blender",
     options={
         "build_exe": {
