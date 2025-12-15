@@ -71,6 +71,14 @@ class JcRender(MenuPrincipal):
         self.menu_edicion.addSeparator()
         self.menu_edicion_preferencias = self.menu_edicion.addAction("&Preferencias")
 
+        #---MENÚ HERRAMIENTAS
+        self.menu_herramientas = QMenu("&Herramientas", self)
+        #---MENÚ HERRAMIENTAS: Submenús
+        self.menu_herramientas_1 = self.menu_herramientas.addAction("&Herramienta 1")
+        self.menu_herramientas_2 = self.menu_herramientas.addAction("&Herramienta 2")
+        self.menu_herramientas.addSeparator()
+        self.menu_herramientas_3 = self.menu_herramientas.addAction("&Herramienta 3")
+
         #---MENÚ AYUDA
         self.menu_ayuda = QMenu("&Ayuda", self)
         #---MENÚ AYUDA: Submenús
@@ -81,6 +89,7 @@ class JcRender(MenuPrincipal):
         # EMPAQUETAMIENTO DE LOS MENÚS EN LA BARRA DE MENÚS
         self.menu_bar.addMenu(self.menu_archivo)
         self.menu_bar.addMenu(self.menu_edicion)
+        self.menu_bar.addMenu(self.menu_herramientas)
         self.menu_bar.addMenu(self.menu_ayuda)
 
 
