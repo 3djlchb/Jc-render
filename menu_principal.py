@@ -797,8 +797,6 @@ class MenuPrincipal(QMainWindow):
 
     def llenar_tabla_metadatos(self, metadata):
 
-        #self.tabla_archivos_blend.setItem(row_idx, 1, QTableWidgetItem(os.path.basename(file_path)))
-
         row = self.tabla_metadatos.rowCount()
         self.tabla_metadatos.insertRow(row)
 
@@ -1133,7 +1131,8 @@ class MenuPrincipal(QMainWindow):
             "-F", f"{self.cmb_formato_img.currentText()}", 
             "-s", f"{self.ent_desde_frame.text()}", 
             "-e", f"{self.ent_hasta_frame.text()}", 
-            "-a", 
+            "-a",
+            "version", 
             "--", 
             "--cycles-device", 
             f"{self.cmb_procesamiento_render.currentText()}",
