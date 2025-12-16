@@ -90,6 +90,17 @@ class MenuPrincipal(QMainWindow):
 
     def __init__(self):
         super().__init__()
+
+        # 1. DEFINICIÓN DENTRO DE __init__
+        self.DB_FOLDER = 'bbdd' 
+        self.DB_NAME = 'configuracion.db'
+        
+        # self.DB_FILE contendrá 'bbdd/configuracion.db'
+        self.DB_FILE = os.path.join(self.DB_FOLDER, self.DB_NAME) 
+        
+        self.TABLA_SQL = 'rutas_blender'
+
+
         # 🟢 Paso Clave 2: Definir la ruta del script usando la función de arriba
         # Esto funciona en .py y en .exe.
         self.info_script_path = get_resource_path("info_archivo_blend.py")
@@ -137,6 +148,7 @@ class MenuPrincipal(QMainWindow):
         self.main_layout.addWidget(self.notebook)
 
         # Inicializa la lista que guardará las rutas.
+        self.lista_rutas_blend_exe = []
         self.lista_rutas_blend = []
 
         # Creación de los tabs y widgets
@@ -169,6 +181,7 @@ class MenuPrincipal(QMainWindow):
         self.tab1_iniciar = QWidget()
         self.notebook.addTab(self.tab1_iniciar, "⚙️ Inicio")
         self._setup_tab_iniciar()
+        self._cargar_rutas_blender_db()
 
         # --- Pestaña 2: Configuración ---
         self.tab2_configurar = QWidget()
@@ -183,8 +196,87 @@ class MenuPrincipal(QMainWindow):
     
     def _setup_tab_iniciar(self):
         """Define los elementos de la pestaña principal de Render y las dos tablas."""
-        layout = QVBoxLayout(self.tab1_iniciar)
+
+        self.estilo_campos = "QHeaderView::section { background-color: rgb(40,108,25) }"
         
+        # --- Grupo 0: Rutas y tablas
+        layout = QVBoxLayout(self.tab1_iniciar)
+
+        grupo_versiones_blender = QGroupBox("Versiones de blender.exe y archivos .blend")
+        layout_versiones_blender = QVBoxLayout(grupo_versiones_blender)
+        layout_versiones_blender.addWidget(QLabel("Ruta blender.exe:"))
+
+        # Ruta del ejecutable de blender (Layout Horizontal)
+        frame_layout_ejecutables = QWidget()
+        layout_ejecutables = QHBoxLayout(frame_layout_ejecutables)
+        layout_ejecutables.setSpacing(5)
+        layout_ejecutables.setContentsMargins(0, 0, 0, 0)
+
+        self.ent_blend_exe = QLineEdit()
+        btn_examinar_exe = QPushButton("Examinar")
+        btn_examinar_exe.clicked.connect(self._buscar_blender_exe)
+
+        layout_ejecutables.addWidget(self.ent_blend_exe)
+        layout_ejecutables.addWidget(btn_examinar_exe)
+        
+        #----------------------------------------------------------------
+        
+        frame_btn_ejecutables = QWidget()
+        layout_btn_ejecutables = QHBoxLayout(frame_btn_ejecutables)
+        layout_btn_ejecutables.setSpacing(5)
+        layout_btn_ejecutables.setContentsMargins(0, 0, 0, 0)
+
+        btn_cargar_exe = QPushButton("Cargar rutas ejecutables blender.exe")
+        btn_examinar_exe.clicked.connect(self._procesar_y_cargar_db)
+        btn_eliminar_exe = QPushButton("Eliminar ruta blender.exe seleccionada")
+        btn_eliminar_exe.clicked.connect(self._eliminar_ruta_seleccionada)
+
+        layout_btn_ejecutables.addWidget(btn_cargar_exe)
+        layout_btn_ejecutables.addWidget(btn_eliminar_exe)
+
+        #-------------------------------------------------------------------
+        # Tabla de guardado de los ejecutables
+        campos_blend_exe = ["Ruta completa blender.exe", "Version blender.exe"]
+
+        frame_tabla_ejecutables = QWidget()
+        layout_tabla_ejecutables = QGridLayout(frame_tabla_ejecutables)
+        layout_tabla_ejecutables.setSpacing(5)
+        layout_tabla_ejecutables.setContentsMargins(0, 0, 0, 0)
+
+        self.tabla_blend_exe = QTableWidget()
+        self.tabla_blend_exe.setColumnCount(len(campos_blend_exe))
+        self.tabla_blend_exe.setHorizontalHeaderLabels(campos_blend_exe)
+        self.tabla_blend_exe.horizontalHeader().setStyleSheet(self.estilo_campos)
+
+        self.tabla_blend_exe.setColumnWidth(0, 800) # Ruta completa blender.exe
+        self.tabla_blend_exe.setColumnWidth(1, 250) # Version blender.exe
+
+        header0 = self.tabla_blend_exe.horizontalHeader()
+
+        # Columna 1 (Ruta completa) toma el espacio restante
+        header0.setSectionResizeMode(0, QHeaderView.Stretch) 
+        
+        # Columna 0 (Nombre archivo) y 2 (Estado) se ajustan al contenido, pero permiten arrastrar
+        header0.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+         
+        # Aseguramos que todas son interactivas (permite arrastrar)
+        header0.setSectionResizeMode(0, QHeaderView.Interactive)
+        header0.setSectionResizeMode(1, QHeaderView.Interactive)
+        header0.setStretchLastSection(True)
+
+        # Combobox con los ejecutables de blender.exe
+        self.cmb_blend_exe = QComboBox()
+
+        layout_tabla_ejecutables.addWidget(self.tabla_blend_exe, 0, 0)
+        layout_tabla_ejecutables.addWidget(self.cmb_blend_exe, 1, 0)
+
+        # --------------------------------------------------------------
+        # Empaquetado de widgets al layout versiones blender
+        layout_versiones_blender.addWidget(frame_layout_ejecutables)
+        layout_versiones_blender.addWidget(frame_btn_ejecutables)
+        layout_versiones_blender.addWidget(frame_tabla_ejecutables)
+        layout_versiones_blender.addStretch(1)
+
         # --- Grupo 1: Rutas ---
         paths_group = QGroupBox("Rutas y Archivos")
         paths_layout = QGridLayout(paths_group)
@@ -215,10 +307,8 @@ class MenuPrincipal(QMainWindow):
         paths_layout.setColumnStretch(0, 1)
 
         # --- Grupo 2: Tabla de los archivos .blend cargados
-        self.estilo_campos = "QHeaderView::section { background-color: rgb(40,108,25) }"
-
         campos_archivos_blend = ["Ruta completa", "Nombre de archivo", "Version blender", "Estado"]
-
+        
         grupo_tabla_archivos_blend = QGroupBox("Carga de archivos .blend")
         layout_tabla_archivos_blend = QVBoxLayout(grupo_tabla_archivos_blend) 
         self.tabla_archivos_blend = QTableWidget()
@@ -254,6 +344,7 @@ class MenuPrincipal(QMainWindow):
         # pero para asegurar que el contenido corto esté visible, usamos esta lógica.
         # Ya que la columna 1 será la principal estirada.
         #header1.setStretchLastSection(False)
+        layout.addWidget(grupo_versiones_blender)
         layout.addWidget(paths_group)
         layout.addWidget(grupo_tabla_archivos_blend)
         
@@ -795,6 +886,16 @@ class MenuPrincipal(QMainWindow):
         pass
 
 
+    def llenar_tabla_blend_exe(self, blend_exe):
+        row_blend = self.tabla_blend_exe.rowCount()
+        self.tabla_blend_exe.insertRow(row_blend)
+
+        self.ruta_blend_exe = QTableWidgetItem(blend_exe)
+
+        self.tabla_blend_exe.setItem(row_blend, 0, self.ruta_blend_exe)
+
+
+
     def llenar_tabla_metadatos(self, metadata):
 
         row = self.tabla_metadatos.rowCount()
@@ -1042,6 +1143,217 @@ class MenuPrincipal(QMainWindow):
         # 3. Insertar el ítem en la tabla
         self.tabla_metadatos_a_renderizar.setItem(row, column, item)
 
+
+    def _buscar_blender_exe(self):
+        """
+        Abre el diálogo de archivo y establece la ruta en el QLineEdit.
+        """
+        # Abre el diálogo de archivo para seleccionar el ejecutable
+        ruta_archivo, _ = QFileDialog.getOpenFileName(
+            self, "Seleccionar blender.exe", "", "Ejecutables (*.exe);;Todos los archivos (*)"
+        )
+
+        if ruta_archivo:
+            # Rellena el campo de texto (QLineEdit)
+            self.ent_blend_exe.setText(ruta_archivo)
+
+
+    def _obtener_version_blender(self, ruta_blender_exe):
+        """
+        Ejecuta 'blender --version' usando la ruta proporcionada y retorna la versión.
+        Retorna None y muestra un error si falla.
+        """
+        try:
+            # Usa subprocess.run para ejecutar el comando
+            resultado = subprocess.run(
+                [ruta_blender_exe, "--version"], 
+                capture_output=True, 
+                text=True, 
+                check=True,
+                timeout=5 # Tiempo límite de 5 segundos
+            )
+            # La versión suele ser la primera línea del output
+            version_linea = resultado.stdout.split('\n')[0].strip()
+            # Busca el número de versión (ej: "Blender 4.0.2 (hash: 998f413a9670)")
+            if version_linea.startswith("Blender"):
+                # Retorna la línea completa o solo el número, según prefieras
+                return version_linea
+            else:
+                return "Versión no detectada"
+
+        except subprocess.CalledProcessError as e:
+            QMessageBox.warning(self, "Error de Ejecución", 
+                                f"El ejecutable no pudo reportar su versión. Error: {e.stderr}")
+            return None
+        except FileNotFoundError:
+            QMessageBox.critical(self, "Error de Archivo", 
+                                f"No se encontró el ejecutable en: {ruta_blender_exe}")
+            return None
+        except Exception as e:
+            QMessageBox.critical(self, "Error Desconocido", 
+                             f"Fallo al intentar obtener la versión: {e}")
+            return None
+        
+
+    def _cargar_rutas_blender_db(self):
+        """
+        Conecta a la DB, consulta TODAS las rutas y llena self.tabla_blend_exe.
+        """
+        self.tabla_blend_exe.setRowCount(0)
+        self.cmb_blend_exe.clear()
+
+        rutas_completas = []
+    
+        # Nota: No necesitamos verificar si self.DB_FOLDER existe aquí, 
+        # ya que si no existe, sqlite3.connect no encontrará el archivo.
+    
+        try:
+            # **USO DE self.DB_FILE**
+            conn = sqlite3.connect(self.DB_FILE)
+            cursor = conn.cursor()
+
+            # **USO DE self.TABLA_SQL**
+            cursor.execute(f"SELECT ruta_ejecutable, version FROM {self.TABLA_SQL} ORDER BY version DESC")
+            filas = cursor.fetchall()
+        
+            self.tabla_blend_exe.setRowCount(len(filas))
+        
+            for num_fila, fila_data in enumerate(filas):
+                item_ruta = QTableWidgetItem(fila_data[0])
+                self.tabla_blend_exe.setItem(num_fila, 0, item_ruta)
+            
+                item_version = QTableWidgetItem(fila_data[1])
+                self.tabla_blend_exe.setItem(num_fila, 1, item_version)
+
+        except sqlite3.OperationalError:
+            # Esto ocurre si la tabla aún no ha sido creada
+            pass 
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Error de Base de Datos", 
+                                f"No se pudo cargar la base de datos: {e}")
+        finally:
+            if 'conn' in locals() and conn:
+                conn.close()
+
+
+    def _procesar_y_cargar_db(self):
+        """
+        Toma la ruta del QLineEdit, asegura la carpeta, guarda la versión en la DB, 
+        y luego refresca la QTableWidget.
+        """
+        ruta_archivo = self.ent_blend_exe.text().strip()
+    
+        if not ruta_archivo or not os.path.exists(ruta_archivo):
+            QMessageBox.warning(self, "Advertencia", 
+                            "Por favor, seleccione un ejecutable de Blender válido primero.")
+            return
+
+        # A. Obtener la versión (función auxiliar)
+        version = self._obtener_version_blender(ruta_archivo)
+    
+        if version is None:
+            return
+        
+        # B. Asegurar la Carpeta 'bbdd'
+        if not os.path.exists(self.DB_FOLDER): 
+            try:
+                os.makedirs(self.DB_FOLDER)
+            except OSError as e:
+                QMessageBox.critical(self, "Error de Directorio", 
+                                 f"No se pudo crear la carpeta de la DB: {e}")
+                return
+        
+        # C. Guardar en la Base de Datos
+        try:
+            # **USO DE self.DB_FILE**
+            conn = sqlite3.connect(self.DB_FILE)
+            cursor = conn.cursor()
+        
+            # **USO DE self.TABLA_SQL**
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {self.TABLA_SQL} (
+                    id INTEGER PRIMARY KEY,
+                    ruta_ejecutable TEXT NOT NULL UNIQUE,
+                    version TEXT
+                );
+            """)
+        
+            sql_insert = f"""
+            INSERT OR IGNORE INTO {self.TABLA_SQL} (ruta_ejecutable, version) 
+            VALUES (?, ?)
+            """
+            cursor.execute(sql_insert, (ruta_archivo, version))
+        
+            conn.commit()
+            # Muestra mensaje solo si se insertó algo
+            if cursor.rowcount > 0:
+                QMessageBox.information(self, "Éxito", "Ruta de Blender guardada y tabla actualizada.")
+
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Error DB", 
+                                f"Fallo al guardar/crear la DB: {e}")
+        finally:
+            if 'conn' in locals() and conn:
+                conn.close()
+
+        # D. Recargar la tabla visual
+        self._cargar_rutas_blender_db()
+
+
+
+    def _eliminar_ruta_seleccionada(self):
+        """
+        Elimina la ruta seleccionada de la QTableWidget de la base de datos SQLite.
+        """
+        indices_seleccionados = self.tabla_blend_exe.selectedIndexes()
+    
+        if not indices_seleccionados:
+            QMessageBox.warning(self, "Advertencia", 
+                                "Por favor, seleccione una fila completa para eliminar.")
+            return
+        
+        fila_a_eliminar = indices_seleccionados[0].row()
+        item_ruta = self.tabla_blend_exe.item(fila_a_eliminar, 0)
+
+        if item_ruta is None:
+            QMessageBox.critical(self, "Error", "No se pudo obtener el dato de la ruta.")
+            return
+
+        ruta_a_eliminar = item_ruta.text()
+    
+        respuesta = QMessageBox.question(self, 'Confirmar Eliminación',
+            f"¿Está seguro que desea eliminar la ruta:\n{ruta_a_eliminar}?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if respuesta == QMessageBox.No:
+            return
+
+        # 4. Eliminar el registro de la Base de Datos
+        try:
+            # **USO DE self.DB_FILE**
+            conn = sqlite3.connect(self.DB_FILE)
+            cursor = conn.cursor()
+        
+            # **USO DE self.TABLA_SQL**
+            sql_delete = f"""
+            DELETE FROM {self.TABLA_SQL} WHERE ruta_ejecutable = ?
+            """
+            cursor.execute(sql_delete, (ruta_a_eliminar,))
+        
+            conn.commit()
+
+            if cursor.rowcount > 0:
+                QMessageBox.information(self, "Éxito", "Ruta eliminada correctamente.")
+
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Error DB", 
+                                f"Fallo al eliminar la ruta de la DB: {e}")
+        finally:
+            if 'conn' in locals() and conn:
+                conn.close()
+
+        # 5. Recargar la tabla visual
+        self._cargar_rutas_blender_db()
 
             
     
