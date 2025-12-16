@@ -441,11 +441,6 @@ class MenuPrincipal(QMainWindow):
         #cfg_layout.rowStretch()
         layout.addWidget(cfg_group)
         
-        
-        
-
-        #layout.addStretch(1)
-
 
     def _setup_tab_consola(self):
         """Define los elementos de la pestaña de Consola de salida."""

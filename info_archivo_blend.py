@@ -14,6 +14,11 @@ def get_blend_file_info():
     view_layer = bpy.context.view_layer
     blend_data = bpy.context.blend_data
 
+    data = bpy.data
+
+    lista_escenas = data.scenes.keys()
+    lista_camaras = data.cameras.keys()
+
     # Datos bpy.app
     version = bpy.app.version_string
     
