@@ -1431,56 +1431,120 @@ class MenuPrincipal(QMainWindow):
         self.consola_salida.append(message)
 
 
-    def start_render(self):
-        """Inicia el proceso de renderizado de Blender en segundo plano."""
+    @Slot(int, int)
+    def manejar_activacion_celda_render(self, row, column):
+        """
+        Slot que se llama al activar la celda (Fila X, Columna 9) de la tabla de render.
+        """
+        COLUMNA_RENDER = 9 # La columna donde se insertó el texto "Render" (no editable)
+    
+        if column == COLUMNA_RENDER:
+            self._preparar_y_lanzar_render(row)
 
-        blender_path = self.cmb_blend_exe.currentData()
+    def _preparar_y_lanzar_render(self, render_row):
+        """
+        Obtiene la configuración de render de una fila específica de la tabla 
+        y ejecuta la función start_render con estos datos.
+        """
+    
+        # 1. Obtener la ruta del archivo .blend (Columna 0 de la tabla de archivos principal)
+        # Necesitas un mapping para obtener la ruta de la tabla principal
+        # ASUMIMOS que la fila 'render_row' en la tabla de render corresponde a la misma 
+        # fila en la tabla principal (self.tabla_archivos_blend).
+    
+        item_nombre = self.tabla_metadatos_a_renderizar.item(render_row, 0) # Columna de Nombre
+        if not item_nombre:
+            QMessageBox.critical(self, "Error", "No se encontró el nombre del archivo en la fila.")
+            return
+
+        nombre_archivo = item_nombre.text()
+    
+        # Buscar la ruta completa en la tabla principal (Columna 0) usando el nombre (Columna 1)
+        blend_file_path = None
+        for row in range(self.tabla_archivos_blend.rowCount()):
+            item_ruta = self.tabla_archivos_blend.item(row, 0)
+            item_nombre_main = self.tabla_archivos_blend.item(row, 1)
+            if item_nombre_main and item_nombre_main.text() == nombre_archivo:
+                blend_file_path = item_ruta.text()
+                break
+            
+        if not blend_file_path:
+            QMessageBox.critical(self, "Error", f"No se encontró la ruta para '{nombre_archivo}'.")
+            return
         
-        #blender_path = self.ent_exe.text().strip()
-        blend_file_path = self.cmb_ruta_blend_a_renderizar.currentText().strip()
+        # 2. Obtener los Widgets y Valores de la Fila de Render
+    
+        # Usamos QTableWidgetItem.text() para los campos de texto
+        carpeta_salida = self.tabla_metadatos_a_renderizar.item(render_row, 4).text()
+        nombre_imagen = self.tabla_metadatos_a_renderizar.item(render_row, 5).text()
+        desde_frame = self.tabla_metadatos_a_renderizar.item(render_row, 7).text()
+        hasta_frame = self.tabla_metadatos_a_renderizar.item(render_row, 8).text()
+
+        # Usamos cellWidget para los QComboBox
+        cmb_motor = self.tabla_metadatos_a_renderizar.cellWidget(render_row, 2)
+        cmb_proceso = self.tabla_metadatos_a_renderizar.cellWidget(render_row, 3)
+        cmb_formato = self.tabla_metadatos_a_renderizar.cellWidget(render_row, 6)
+    
+        if not all([cmb_motor, cmb_proceso, cmb_formato]):
+            QMessageBox.critical(self, "Error", "Faltan widgets de configuración en la tabla.")
+            return
+
+        # Obtener los valores actuales de los ComboBox
+        motor_render = cmb_motor.currentText()
+        proceso_render = cmb_proceso.currentText()
+        formato_img = cmb_formato.currentText()
+
+        # 3. Llamar a la función de renderizado
+        self._start_render_con_params(
+            blend_file_path=blend_file_path,
+            motor=motor_render,
+            proceso=proceso_render,
+            carpeta=carpeta_salida,
+            nombre_img=nombre_imagen,
+            formato=formato_img,
+            frame_s=desde_frame,
+            frame_e=hasta_frame
+        )
+    
+    # Nueva versión de start_render que acepta parámetros de la tabla
+    def _start_render_con_params(self, blend_file_path, motor, proceso, carpeta, nombre_img, formato, frame_s, frame_e):
+        """Inicia el proceso de renderizado de Blender con parámetros explícitos."""
+    
+        blender_path = self.cmb_blend_exe.currentData()
 
         if not blender_path or not os.path.exists(blender_path):
             QMessageBox.warning(self, "Error de Ruta", "Ruta de Blender no válida o vacía.")
             return
-        if not blend_file_path or not os.path.exists(blend_file_path):
-            QMessageBox.warning(self, "Error de Ruta", "Ruta del archivo .blend no válida o vacía.")
-            return
-            
         if self.blender_process.state() == QProcess.Running:
             QMessageBox.information(self, "Proceso Activo", "Un renderizado ya está en curso.")
             return
 
+        # Construir los argumentos con los nuevos parámetros
         command_args = [
             "-b", 
             blend_file_path,
-            #"--python",
-            #self.info_script_path,
             "-y",
-            "-E", f"{self.cmb_engine.currentText()}",
+            "-E", f"{motor}",
             "--debug-all",
-            "-o", f"//{self.ent_carpeta_salida.text()}/{self.ent_nombre_imagen.text()}", 
-            "-F", f"{self.cmb_formato_img.currentText()}", 
-            "-s", f"{self.ent_desde_frame.text()}", 
-            "-e", f"{self.ent_hasta_frame.text()}", 
-            "-a",
-            "version", 
+            "-o", f"//{carpeta}/{nombre_img}", 
+            "-F", f"{formato}", 
+            "-s", f"{frame_s}", 
+            "-e", f"{frame_e}", 
+            "-a", # Comando para iniciar el render
             "--", 
             "--cycles-device", 
-            f"{self.cmb_procesamiento_render.currentText()}",
+            f"{proceso}",
             "--cycles-print-stats",
-            
         ]
-        
+    
         full_command_str = f"'{blender_path}' {' '.join([f'\"{arg}\"' if ' ' in arg else arg for arg in command_args])}"
         self.consola_salida.clear()
         self.consola_salida.append(f"Iniciando Renderizado (DEBUG): **{full_command_str}**")
-        
-        self.btn_renderizar.setEnabled(False)
+    
+        self.btn_renderizar.setEnabled(False) # Bloquear el botón de render general si existe
 
         try:
             self.blender_process.start(blender_path, command_args)
         except Exception as e:
             self.consola_salida.append(f"<span style='color: red;'>Error al intentar iniciar el proceso: {e}</span>")
             self.btn_renderizar.setEnabled(True)
-
-
