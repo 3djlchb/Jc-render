@@ -90,6 +90,20 @@ class MenuPrincipal(QMainWindow):
 
     def __init__(self):
         super().__init__()
+
+        self.central_widget = QWidget()  # Contenedor central
+        self.setCentralWidget(self.central_widget)
+        
+        self.main_layout = QVBoxLayout(self.central_widget)  # Layout principal del contenedor central
+
+        self.notebook = QTabWidget()  # Crear el widget de pestañas (Notebook)
+        self.main_layout.addWidget(self.notebook)
+
+        # Inicializa la lista que guardará las rutas.
+        self.lista_rutas_blend_exe = []
+        self.lista_rutas_blend = []
+
+
         # 🟢 Paso Clave 2: Definir la ruta del script usando la función de arriba
         # Esto funciona en .py y en .exe.
         self.info_script_path = get_resource_path("info_archivo_blend.py")
@@ -102,18 +116,18 @@ class MenuPrincipal(QMainWindow):
 
         # Configuración para persistencia (QSettings)
         self.settings = QSettings("JC", "JcRenderApp")
+        self._default_dir = os.path.expanduser("~")  # Inicialización de la variable _default_dir (Solución al AttributeError)
+
+        # Creación de los tabs y widgets
+        self._crear_tabs()
+        
+        # Cargar la configuración persistente
+        self._cargar_configuracion() 
 
         # --- INICIALIZACION DE QPROCESS
-        self.blender_process = QProcess(self) 
-        self.blender_process.readyReadStandardOutput.connect(self.read_std_output)
-        self.blender_process.readyReadStandardError.connect(self.read_std_error)
-        self.blender_process.finished.connect(self.process_finished) 
-
-        # --- NUEVO: Proceso para obtener info del archivo ---
+        self.blender_process = QProcess(self)
         self.info_process = QProcess(self)
-        self.info_process.readyReadStandardOutput.connect(self.read_info_output)
-        self.info_process.readyReadStandardError.connect(self.read_info_error)
-        self.info_process.finished.connect(self.info_process_finished)
+        self.progress_timer = QTimer(self) # <-- ¡ESTA LÍNEA ES CLAVE!
 
         # 🟢 INICIALIZACIÓN FALTANTE: TEMPORIZADOR Y VARIABLES DE ESTADO
         # Buffer para acumular la salida de Blender
@@ -121,29 +135,80 @@ class MenuPrincipal(QMainWindow):
         self._current_process_row = -1 
         self._simulated_progress = 0
 
-        self.progress_timer = QTimer(self) # <-- ¡ESTA LÍNEA ES CLAVE!
+        # 1. DEFINICIÓN DENTRO DE __init__
+        self.DB_FOLDER = 'bbdd' 
+        self.DB_NAME = 'configuracion.db'
+        
+        # self.DB_FILE contendrá 'bbdd/configuracion.db'
+        self.DB_FILE = os.path.join(self.DB_FOLDER, self.DB_NAME) 
+        self.TABLA_SQL = 'rutas_blender'
+
+        # 2. 🔗 Conexiones de Procesos Asíncronos (CRÍTICAS)
+        self._connect_async_processes()
+
+        # 3. 🔗 Conexiones de Eventos de la Interfaz
+        #self._connect_ui_signals()
+
+        # 4. 🚀 Inicialización Final
+        self._initial_load()
+
+    
+    def _connect_async_processes(self):
+
+        self.blender_process.readyReadStandardOutput.connect(self.read_std_output)
+        self.blender_process.readyReadStandardError.connect(self.read_std_error)
+        self.blender_process.finished.connect(self.process_finished) 
+
         self.progress_timer.timeout.connect(self._update_simulated_progress)
 
-        
+        # --- NUEVO: Proceso para obtener info del archivo ---
+        self.info_process.readyReadStandardOutput.connect(self.read_info_output)
+        self.info_process.readyReadStandardError.connect(self.read_info_error)
+        self.info_process.finished.connect(self.info_process_finished)
 
-        self._default_dir = os.path.expanduser("~")  # Inicialización de la variable _default_dir (Solución al AttributeError)
+    
+    def _connect_ui_signals(self):
+        """Conecta los botones, campos de texto y tablas a sus slots."""
         
-        self.central_widget = QWidget()  # Contenedor central
-        self.setCentralWidget(self.central_widget)
+        # --- PESTAÑA PRINCIPAL (Carga de Archivos) ---
         
-        self.main_layout = QVBoxLayout(self.central_widget)  # Layout principal del contenedor central
-
-        self.notebook = QTabWidget()  # Crear el widget de pestañas (Notebook)
-        self.main_layout.addWidget(self.notebook)
-
-        # Inicializa la lista que guardará las rutas.
-        self.lista_rutas_blend = []
-
-        # Creación de los tabs y widgets
-        self._crear_tabs()
+        # 1. Selector de Archivo .blend
+        # self.btn_browse_blend.clicked.connect(self._browse_blend_file)
+        # 2. Botón de Carga (Inicia el QProcess de metadatos)
+        self.btn_cargar.clicked.connect(self._cargar_blend_a_tabla) 
         
-        # Cargar la configuración persistente
-        self._cargar_configuracion() 
+        # 3. Clics en la Tabla Principal (para interacción/selección)
+        self.tabla_archivos_blend.cellClicked.connect(self.manejar_clic_celda)
+        # Si tienes la ruta del script guardada:
+        # self.btn_select_script.clicked.connect(self._browse_script_file)
+
+
+        # --- PESTAÑA DE CONFIGURACIÓN DE BLENDER (Base de Datos) ---
+        
+        # 4. Selector de Ejecutable de Blender
+        self.btn_examinar_exe.clicked.connect(self._buscar_blender_exe)
+        # 5. Botón Añadir a DB
+        self.btn_examinar_exe.clicked.connect(self._procesar_y_cargar_db)
+        # 6. Botón Eliminar de DB
+        self.btn_eliminar_exe.clicked.connect(self._eliminar_ruta_seleccionada)
+        
+        
+        # --- PESTAÑA DE RENDERIZADO ---
+        
+        # 7. Disparador de Render (Clic en la columna 9 de la tabla de render)
+        # Aquí conectamos la activación/clic de la celda "Render"
+        self.tabla_metadatos_a_renderizar.cellActivated.connect(self.manejar_activacion_celda_render)
+        
+        # 8. Botón General de Render (Si existe, usar la versión con parámetros)
+        # self.btn_renderizar.clicked.connect(self.start_render) # <-- Si el botón lee los campos de la tabla
+
+
+    def _initial_load(self):
+        """Carga inicial de datos al iniciar la aplicación."""
+        
+        # 1. Cargar las rutas de Blender desde la Base de Datos
+        self._cargar_rutas_blender_db()
+        
 
 
     def _cargar_configuracion(self):
@@ -152,7 +217,7 @@ class MenuPrincipal(QMainWindow):
         # 1. Cargar ruta del ejecutable de Blender
         blender_path = self.settings.value("blender_exe_path", "", type=str)
         if blender_path:
-            self.ent_exe.setText(blender_path)
+            self.ent_blend_exe.setText(blender_path)
             print(f"Configuración cargada: Ruta de Blender establecida a {blender_path}")
 
         # 2. Cargar la última carpeta del archivo .blend
@@ -169,6 +234,7 @@ class MenuPrincipal(QMainWindow):
         self.tab1_iniciar = QWidget()
         self.notebook.addTab(self.tab1_iniciar, "⚙️ Inicio")
         self._setup_tab_iniciar()
+        #self._cargar_rutas_blender_db()
 
         # --- Pestaña 2: Configuración ---
         self.tab2_configurar = QWidget()
@@ -183,42 +249,120 @@ class MenuPrincipal(QMainWindow):
     
     def _setup_tab_iniciar(self):
         """Define los elementos de la pestaña principal de Render y las dos tablas."""
+
+        self.estilo_campos = "QHeaderView::section { background-color: rgb(40,108,25) }"
+        
+        # --- Grupo 0: Rutas y tablas
         layout = QVBoxLayout(self.tab1_iniciar)
+
+        grupo_versiones_blender = QGroupBox("Versiones de blender.exe y archivos .blend")
+        layout_versiones_blender = QVBoxLayout(grupo_versiones_blender)
+        layout_versiones_blender.addWidget(QLabel("Ruta blender.exe:"))
+
+        # Ruta del ejecutable de blender (Layout Horizontal)
+        frame_layout_ejecutables = QWidget()
+        layout_ejecutables = QHBoxLayout(frame_layout_ejecutables)
+        layout_ejecutables.setSpacing(5)
+        layout_ejecutables.setContentsMargins(0, 0, 0, 0)
+
+        self.ent_blend_exe = QLineEdit()
+        self.btn_examinar_exe = QPushButton("Examinar")
+        self.btn_examinar_exe.clicked.connect(self._buscar_blender_exe)
+
+        layout_ejecutables.addWidget(self.ent_blend_exe)
+        layout_ejecutables.addWidget(self.btn_examinar_exe)
         
-        # --- Grupo 1: Rutas ---
-        paths_group = QGroupBox("Rutas y Archivos")
-        paths_layout = QGridLayout(paths_group)
+        #----------------------------------------------------------------
         
-        # Ruta del ejecutable de Blender
-        paths_layout.addWidget(QLabel("Ruta del ejecutable de Blender:"), 0, 0)
-        self.ent_exe = QLineEdit()
+        frame_btn_ejecutables = QWidget()
+        layout_btn_ejecutables = QHBoxLayout(frame_btn_ejecutables)
+        layout_btn_ejecutables.setSpacing(5)
+        layout_btn_ejecutables.setContentsMargins(0, 0, 0, 0)
+
+        self.btn_cargar_exe = QPushButton("Cargar rutas ejecutables blender.exe")
+        self.btn_cargar_exe.clicked.connect(self._procesar_y_cargar_db)
+        self.btn_eliminar_exe = QPushButton("Eliminar ruta blender.exe seleccionada")
+        self.btn_eliminar_exe.clicked.connect(self._eliminar_ruta_seleccionada)
+
+        layout_btn_ejecutables.addWidget(self.btn_cargar_exe)
+        layout_btn_ejecutables.addWidget(self.btn_eliminar_exe)
+
+        #-------------------------------------------------------------------
+        # Tabla de guardado de los ejecutables
+        campos_blend_exe = ["Ruta completa blender.exe", "Version blender.exe"]
+
+        frame_tabla_ejecutables = QWidget()
+        layout_tabla_ejecutables = QGridLayout(frame_tabla_ejecutables)
+        layout_tabla_ejecutables.setSpacing(5)
+        layout_tabla_ejecutables.setContentsMargins(0, 0, 0, 0)
+
+        self.tabla_blend_exe = QTableWidget()
+        self.tabla_blend_exe.setColumnCount(len(campos_blend_exe))
+        self.tabla_blend_exe.setHorizontalHeaderLabels(campos_blend_exe)
+        self.tabla_blend_exe.horizontalHeader().setStyleSheet(self.estilo_campos)
+
+        self.tabla_blend_exe.setColumnWidth(0, 800) # Ruta completa blender.exe
+        self.tabla_blend_exe.setColumnWidth(1, 250) # Version blender.exe
+
+        header0 = self.tabla_blend_exe.horizontalHeader()
+
+        # Columna 1 (Ruta completa) toma el espacio restante
+        header0.setSectionResizeMode(0, QHeaderView.Stretch) 
         
-        btn_exe = QPushButton("Examinar")
-        btn_exe.clicked.connect(self._browse_blender_exe)
+        # Columna 0 (Nombre archivo) y 2 (Estado) se ajustan al contenido, pero permiten arrastrar
+        header0.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+         
+        # Aseguramos que todas son interactivas (permite arrastrar)
+        header0.setSectionResizeMode(0, QHeaderView.Interactive)
+        header0.setSectionResizeMode(1, QHeaderView.Interactive)
+        header0.setStretchLastSection(True)
+
+        layout_tabla_ejecutables.addWidget(self.tabla_blend_exe, 0, 0)
         
-        # Ruta del archivo .blend
-        paths_layout.addWidget(QLabel("Ruta del archivo .blend:"), 2, 0)
+
+        #----------------------------------------------------------------
+        frame_lista_ejecutables = QWidget()
+        layout_lista_ejecutables = QGridLayout(frame_lista_ejecutables)
+        layout_lista_ejecutables.setSpacing(5)
+        layout_lista_ejecutables.setContentsMargins(0, 0, 0, 0)
+
+        lb_lista_blend_exe = QLabel("Lista blend.exe:")
+        self.cmb_blend_exe = QComboBox()
+
+        lb_ent_archivo_blend = QLabel("Ruta del archivo .blend:")
         self.ent_blend = QLineEdit()
-        
         btn_blend = QPushButton("Examinar")
         btn_blend.clicked.connect(self._browse_blend_file)
+
+        layout_lista_ejecutables.addWidget(lb_lista_blend_exe, 0, 0)
+        layout_lista_ejecutables.addWidget(self.cmb_blend_exe, 1, 0, 1, 2)
+        layout_lista_ejecutables.addWidget(lb_ent_archivo_blend, 2, 0)
+        layout_lista_ejecutables.addWidget(self.ent_blend, 3, 0)
+        layout_lista_ejecutables.addWidget(btn_blend, 3, 1)
+
+        #-----------------------------------------------------------------
+        frame_btn_cargar = QWidget()
+        layout_btn_cargar = QHBoxLayout(frame_btn_cargar)
+        layout_btn_cargar.setSpacing(5)
+        layout_btn_cargar.setContentsMargins(0, 0, 0, 0)
 
         self.btn_cargar = QPushButton("Cargar")
         self.btn_cargar.clicked.connect(self._cargar_blend_a_tabla)
 
-        paths_layout.addWidget(self.ent_exe, 1, 0)
-        paths_layout.addWidget(btn_exe, 1, 1)
-        paths_layout.addWidget(self.ent_blend, 3, 0)
-        paths_layout.addWidget(btn_blend, 3, 1)
-        paths_layout.addWidget(self.btn_cargar, 4, 0, 1, 2)
-        
-        paths_layout.setColumnStretch(0, 1)
+        layout_btn_cargar.addWidget(self.btn_cargar)
+
+        # --------------------------------------------------------------
+        # Empaquetado de widgets al layout versiones blender
+        layout_versiones_blender.addWidget(frame_layout_ejecutables)
+        layout_versiones_blender.addWidget(frame_btn_ejecutables)
+        layout_versiones_blender.addWidget(frame_tabla_ejecutables)
+        layout_versiones_blender.addWidget(frame_lista_ejecutables)
+        layout_versiones_blender.addWidget(frame_btn_cargar)
+        layout_versiones_blender.addStretch(1)
 
         # --- Grupo 2: Tabla de los archivos .blend cargados
-        self.estilo_campos = "QHeaderView::section { background-color: rgb(40,108,25) }"
-
         campos_archivos_blend = ["Ruta completa", "Nombre de archivo", "Version blender", "Estado"]
-
+        
         grupo_tabla_archivos_blend = QGroupBox("Carga de archivos .blend")
         layout_tabla_archivos_blend = QVBoxLayout(grupo_tabla_archivos_blend) 
         self.tabla_archivos_blend = QTableWidget()
@@ -254,18 +398,15 @@ class MenuPrincipal(QMainWindow):
         # pero para asegurar que el contenido corto esté visible, usamos esta lógica.
         # Ya que la columna 1 será la principal estirada.
         #header1.setStretchLastSection(False)
-        layout.addWidget(paths_group)
+        layout.addWidget(grupo_versiones_blender)
         layout.addWidget(grupo_tabla_archivos_blend)
         
         
-
-
     def _setup_tab_configurar(self):
 
         """Define los elementos de la pestaña de Configuración avanzada."""
         layout = QVBoxLayout(self.tab2_configurar)
         
-
         # --- Grupo 3: Tabla de Metadatos --- (NUEVO)
         campos_metadatos = ["Nombre de archivo", "Version blender", "Escena activa", "View Layer", "Camara activa", 
                             "Frame Inicio", "Frame Fin", "fps", "Resolución", "Cameras"]
@@ -294,8 +435,6 @@ class MenuPrincipal(QMainWindow):
 
         layout.addWidget(grupo_tabla_metadatos)
         
-
-
         header2 = self.tabla_metadatos.horizontalHeader()
         
         # 🟢 Lógica de AJUSTE MIXTO (Tabla 2: Metadatos)
@@ -327,7 +466,6 @@ class MenuPrincipal(QMainWindow):
         self.tabla_metadatos_a_renderizar.setHorizontalHeaderLabels(campos_metadatos_a_renderizar)
         self.tabla_metadatos_a_renderizar.horizontalHeader().setStyleSheet(self.estilo_campos)
 
-        #self.tabla_metadatos_a_renderizar.setColumnWidth(0, 250) # Ruta completa
         self.tabla_metadatos_a_renderizar.setColumnWidth(0, 250) # Nombre de archivo
         self.tabla_metadatos_a_renderizar.setColumnWidth(1, 100) # Version blender
         self.tabla_metadatos_a_renderizar.setColumnWidth(2, 100) # Motor de render
@@ -338,7 +476,8 @@ class MenuPrincipal(QMainWindow):
         self.tabla_metadatos_a_renderizar.setColumnWidth(7, 100) # Desde Frame
         self.tabla_metadatos_a_renderizar.setColumnWidth(8, 100) # Hasta Frame
         self.tabla_metadatos_a_renderizar.setColumnWidth(9, 100) # Render
-        #self.tabla_metadatos_a_renderizar.setColumnWidth(10, 100) # Cameras
+
+        self.tabla_metadatos_a_renderizar.cellClicked.connect(self.manejar_activacion_celda_render)
 
         layout_tabla_metadatos_a_renderizar.addWidget(self.tabla_metadatos_a_renderizar)
         layout_tabla_metadatos_a_renderizar.addStretch()
@@ -433,7 +572,7 @@ class MenuPrincipal(QMainWindow):
 
         # Fila 9: Btn Renderizar
         self.btn_renderizar = QPushButton("🚀 Iniciar Renderizado en Background")
-        self.btn_renderizar.clicked.connect(self.start_render)
+        self.btn_renderizar.clicked.connect(self._start_render_con_params)
         cfg_layout.addWidget(self.btn_renderizar, 3, 0, 1, 15)
 
         # EMPAQUETAMIENTO DE LOS DIFERENTES 
@@ -707,7 +846,8 @@ class MenuPrincipal(QMainWindow):
  
 
     def ejecutar_extractor_blender(self, blend_path):
-        blender_exe = self.ent_exe.text().strip()
+        blender_exe = self.cmb_blend_exe.currentData()
+        #blender_exe = self.ent_exe.text().strip()
     
         # 🟢 Paso Clave 3: Usar la ruta de clase resuelta
         script_py = self.info_script_path
@@ -796,8 +936,6 @@ class MenuPrincipal(QMainWindow):
 
 
     def llenar_tabla_metadatos(self, metadata):
-
-        #self.tabla_archivos_blend.setItem(row_idx, 1, QTableWidgetItem(os.path.basename(file_path)))
 
         row = self.tabla_metadatos.rowCount()
         self.tabla_metadatos.insertRow(row)
@@ -954,6 +1092,7 @@ class MenuPrincipal(QMainWindow):
 
     @Slot(int, int)
     def manejar_activacion_celda(self, row, column):
+        print(f"DEBUG: Clic detectado en Fila {row}, Columna {column}")
         """
         Slot que se llama al activar cualquier celda. Filtra por la celda específica (fila X, columna 9).
         """
@@ -1045,22 +1184,233 @@ class MenuPrincipal(QMainWindow):
         self.tabla_metadatos_a_renderizar.setItem(row, column, item)
 
 
-            
-    
-    def _browse_blender_exe(self):
-        """Selecciona el ejecutable de Blender y guarda la ruta de forma persistente."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, 
-            "Seleccionar Ejecutable de Blender", 
-            os.path.expanduser("~"), 
-            "Ejecutables de Blender (blender.exe); Todos los archivos (*.*)"
+    def _buscar_blender_exe(self):
+        """
+        Abre el diálogo de archivo y establece la ruta en el QLineEdit.
+        """
+        # Abre el diálogo de archivo para seleccionar el ejecutable
+        ruta_archivo, _ = QFileDialog.getOpenFileName(
+            self, "Seleccionar blender.exe", "", "Ejecutables (*.exe);;Todos los archivos (*)"
         )
-        if file_path:
-            self.ent_exe.setText(file_path)
-            self.settings.setValue("blender_exe_path", file_path)
-            print(f"Ruta de Blender seleccionada y guardada: {file_path}")
+
+        if ruta_archivo:
+            # Rellena el campo de texto (QLineEdit)
+            self.ent_blend_exe.setText(ruta_archivo)
 
 
+    def _obtener_version_blender(self, ruta_blender_exe):
+        """
+        Ejecuta 'blender --version' usando la ruta proporcionada y retorna la versión.
+        Retorna None y muestra un error si falla.
+        """
+        try:
+            # Usa subprocess.run para ejecutar el comando
+            resultado = subprocess.run(
+                [ruta_blender_exe, "--version"], 
+                capture_output=True, 
+                text=True, 
+                check=True,
+                timeout=5 # Tiempo límite de 5 segundos
+            )
+            # La versión suele ser la primera línea del output
+            version_linea = resultado.stdout.split('\n')[0].strip()
+            # Busca el número de versión (ej: "Blender 4.0.2 (hash: 998f413a9670)")
+            if version_linea.startswith("Blender"):
+                # Retorna la línea completa o solo el número, según prefieras
+                return version_linea
+            else:
+                return "Versión no detectada"
+
+        except subprocess.CalledProcessError as e:
+            QMessageBox.warning(self, "Error de Ejecución", 
+                                f"El ejecutable no pudo reportar su versión. Error: {e.stderr}")
+            return None
+        except FileNotFoundError:
+            QMessageBox.critical(self, "Error de Archivo", 
+                                f"No se encontró el ejecutable en: {ruta_blender_exe}")
+            return None
+        except Exception as e:
+            QMessageBox.critical(self, "Error Desconocido", 
+                             f"Fallo al intentar obtener la versión: {e}")
+            return None
+        
+
+    def _cargar_rutas_blender_db(self):
+        """
+        Conecta a la DB, consulta TODAS las rutas y llena self.tabla_blend_exe y self.cmb_blend_exe.
+        """
+    
+        # -- 1. Limpiar los widgets
+        self.tabla_blend_exe.setRowCount(0)
+        self.cmb_blend_exe.clear() # <--- LIMPIAR EL COMBOBOX
+
+        rutas_completas = []
+    
+        try:
+            conn = sqlite3.connect(self.DB_FILE)
+            cursor = conn.cursor()
+
+            # Obtenemos solo la ruta y la versión.
+            cursor.execute(f"SELECT ruta_ejecutable, version FROM {self.TABLA_SQL} ORDER BY version DESC")
+            filas = cursor.fetchall()
+        
+            self.tabla_blend_exe.setRowCount(len(filas))
+        
+            # -- 2. Llenar QTableWidget y recolectar datos
+            for num_fila, fila_data in enumerate(filas):
+                ruta = fila_data[0]
+                version = fila_data[1]
+            
+                # Formato a mostrar en el ComboBox (opcional, pero útil)
+                texto_combo = f"{version} ({os.path.basename(ruta)})" 
+            
+                # Guardamos la ruta (el valor interno real)
+                rutas_completas.append((texto_combo, ruta)) 
+            
+                # Llenar QTableWidget
+                item_ruta = QTableWidgetItem(ruta)
+                self.tabla_blend_exe.setItem(num_fila, 0, item_ruta)
+            
+                item_version = QTableWidgetItem(version)
+                self.tabla_blend_exe.setItem(num_fila, 1, item_version)
+
+            # -- 3. Llenar QComboBox
+            for texto_mostrar, ruta_valor in rutas_completas:
+                # Añade el texto visible y el dato real (la ruta completa)
+                self.cmb_blend_exe.addItem(texto_mostrar, ruta_valor) # <--- LLENAR CON DATOS
+
+            print(f"Tabla y ComboBox actualizados con {len(filas)} ejecutables.")
+
+        except sqlite3.OperationalError:
+            pass # La tabla no existe, no hay problema.
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Error de Base de Datos", 
+                                f"No se pudo cargar la base de datos: {e}")
+        finally:
+            if 'conn' in locals() and conn:
+                conn.close()
+
+
+    def _procesar_y_cargar_db(self):
+        """
+        Toma la ruta del QLineEdit, asegura la carpeta, guarda la versión en la DB, 
+        y luego refresca la QTableWidget.
+        """
+        ruta_archivo = self.ent_blend_exe.text().strip()
+    
+        if not ruta_archivo or not os.path.exists(ruta_archivo):
+            QMessageBox.warning(self, "Advertencia", 
+                            "Por favor, seleccione un ejecutable de Blender válido primero.")
+            return
+
+        # A. Obtener la versión (función auxiliar)
+        version = self._obtener_version_blender(ruta_archivo)
+    
+        if version is None:
+            return
+        
+        # B. Asegurar la Carpeta 'bbdd'
+        if not os.path.exists(self.DB_FOLDER): 
+            try:
+                os.makedirs(self.DB_FOLDER)
+            except OSError as e:
+                QMessageBox.critical(self, "Error de Directorio", 
+                                 f"No se pudo crear la carpeta de la DB: {e}")
+                return
+        
+        # C. Guardar en la Base de Datos
+        try:
+            # **USO DE self.DB_FILE**
+            conn = sqlite3.connect(self.DB_FILE)
+            cursor = conn.cursor()
+        
+            # **USO DE self.TABLA_SQL**
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {self.TABLA_SQL} (
+                    id INTEGER PRIMARY KEY,
+                    ruta_ejecutable TEXT NOT NULL UNIQUE,
+                    version TEXT
+                );
+            """)
+        
+            sql_insert = f"""
+            INSERT OR IGNORE INTO {self.TABLA_SQL} (ruta_ejecutable, version) 
+            VALUES (?, ?)
+            """
+            cursor.execute(sql_insert, (ruta_archivo, version))
+        
+            conn.commit()
+            # Muestra mensaje solo si se insertó algo
+            if cursor.rowcount > 0:
+                QMessageBox.information(self, "Éxito", "Ruta de Blender guardada y tabla actualizada.")
+
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Error DB", 
+                                f"Fallo al guardar/crear la DB: {e}")
+        finally:
+            if 'conn' in locals() and conn:
+                conn.close()
+
+        # D. Recargar la tabla visual
+        self._cargar_rutas_blender_db()
+
+
+
+    def _eliminar_ruta_seleccionada(self):
+        """
+        Elimina la ruta seleccionada de la QTableWidget de la base de datos SQLite.
+        """
+        indices_seleccionados = self.tabla_blend_exe.selectedIndexes()
+    
+        if not indices_seleccionados:
+            QMessageBox.warning(self, "Advertencia", 
+                                "Por favor, seleccione una fila completa para eliminar.")
+            return
+        
+        fila_a_eliminar = indices_seleccionados[0].row()
+        item_ruta = self.tabla_blend_exe.item(fila_a_eliminar, 0)
+
+        if item_ruta is None:
+            QMessageBox.critical(self, "Error", "No se pudo obtener el dato de la ruta.")
+            return
+
+        ruta_a_eliminar = item_ruta.text()
+    
+        respuesta = QMessageBox.question(self, 'Confirmar Eliminación',
+            f"¿Está seguro que desea eliminar la ruta:\n{ruta_a_eliminar}?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if respuesta == QMessageBox.No:
+            return
+
+        # 4. Eliminar el registro de la Base de Datos
+        try:
+            # **USO DE self.DB_FILE**
+            conn = sqlite3.connect(self.DB_FILE)
+            cursor = conn.cursor()
+        
+            # **USO DE self.TABLA_SQL**
+            sql_delete = f"""
+            DELETE FROM {self.TABLA_SQL} WHERE ruta_ejecutable = ?
+            """
+            cursor.execute(sql_delete, (ruta_a_eliminar,))
+        
+            conn.commit()
+
+            if cursor.rowcount > 0:
+                QMessageBox.information(self, "Éxito", "Ruta eliminada correctamente.")
+
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Error DB", 
+                                f"Fallo al eliminar la ruta de la DB: {e}")
+        finally:
+            if 'conn' in locals() and conn:
+                conn.close()
+
+        # 5. Recargar la tabla visual
+        self._cargar_rutas_blender_db()
+
+            
     def _browse_blend_file(self):
         """Selecciona el archivo .blend y guarda la carpeta contenedora de forma persistente."""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1092,65 +1442,168 @@ class MenuPrincipal(QMainWindow):
         self.consola_salida.append(f"<span style='color: red;'>{data.strip()}</span>")
 
     def process_finished(self, exit_code, exit_status):
+        """
+        Maneja el resultado del QProcess de Blender, clasificando el código de salida
+        en Éxito (0), Advertencia (1) o Error Crítico (>1).
+        """
+        # Reactivar el botón de renderizar
         self.btn_renderizar.setEnabled(True)
+    
+        es_salida_normal = (exit_status == QProcess.NormalExit)
+    
+        if es_salida_normal:
         
-        if exit_status == QProcess.NormalExit and exit_code == 0:
-            message = "✅ **Renderizado Finalizado Correctamente.**"
-            QMessageBox.information(self, "Proceso Finalizado", "El renderizado ha terminado con éxito.")
-        else:
-            message = f"❌ **El renderizado finalizó con un error.** Código: {exit_code}"
-            QMessageBox.critical(self, "Proceso Fallido", message)
+            if exit_code == 0:
+                # 1. NIVEL: ÉXITO LIMPIO (Código 0)
+                message = "✅ **Renderizado Finalizado Correctamente.**"
+                QMessageBox.information(self, "Proceso Finalizado", "El renderizado ha terminado con éxito.")
             
+            elif exit_code == 1:
+                # 2. NIVEL: ADVERTENCIA (Código 1)
+                # Cubre errores comunes de Blender como fallos de add-ons, archivos faltantes (el 'version'), etc.
+                message = f"⚠️ **Renderizado Finalizado con Advertencias (Código: 1).**"
+            
+                QMessageBox.warning(self, "Advertencia de Renderizado", 
+                    "El renderizado terminó, pero Blender reportó fallos menores (ej. errores de add-ons o archivos de configuración faltantes).\n\n"
+                    "**Si el archivo de salida existe y es utilizable, puede ignorar esta advertencia.**"
+                )
+            
+            else: # Códigos de salida mayores a 1 (2, 3, etc.)
+                # 3. NIVEL: ERROR CRÍTICO (Código >1)
+                message = f"❌ **El renderizado finalizó con un error CRÍTICO.** Código: ({exit_code})"
+                QMessageBox.critical(self, "Proceso Fallido", 
+                                    f"El renderizado ha fallado debido a un error crítico (Código: {exit_code}).\n\n"
+                                    "Esto puede ser causado por argumentos de línea de comandos incorrectos o un fallo interno de Blender."
+                )
+            
+        else:
+            # El proceso fue detenido, fue un crash del sistema operativo, o no finalizó correctamente.
+            message = f"❌ **El proceso de renderizado no finalizó normalmente.**"
+            QMessageBox.critical(self, "Proceso Fallido", 
+                                "El proceso de Blender fue detenido o finalizó de forma inesperada. No se pudo obtener la salida normal.")
+
+        # Siempre añadir el resultado a la consola de salida
         self.consola_salida.append(message)
 
 
-    def start_render(self):
-        """Inicia el proceso de renderizado de Blender en segundo plano."""
+    @Slot(int, int)
+    def manejar_activacion_celda_render(self, row, column):
+        print(f"DEBUG: Clic detectado en Fila {row}, Columna {column}")
+        """
+        Slot que se llama al activar la celda (Fila X, Columna 9) de la tabla de render.
+        """
+        COLUMNA_RENDER = 9 # La columna donde se insertó el texto "Render" (no editable)
+    
+        if column == COLUMNA_RENDER:
+            self._preparar_y_lanzar_render(row)
+
+
+    def _preparar_y_lanzar_render(self, render_row):
+
+        blender_path = self.cmb_blend_exe.currentData()
+        """
+        Obtiene la configuración de render de una fila específica de la tabla 
+        y ejecuta la función start_render con estos datos.
+        """
+    
+        # 1. Obtener la ruta del archivo .blend (Columna 0 de la tabla de archivos principal)
+        # Necesitas un mapping para obtener la ruta de la tabla principal
+        # ASUMIMOS que la fila 'render_row' en la tabla de render corresponde a la misma 
+        # fila en la tabla principal (self.tabla_archivos_blend).
+    
+        item_nombre = self.tabla_metadatos_a_renderizar.item(render_row, 0) # Columna de Nombre
+        if not item_nombre:
+            QMessageBox.critical(self, "Error", "No se encontró el nombre del archivo en la fila.")
+            return
+
+        nombre_archivo = item_nombre.text()
+    
+        # Buscar la ruta completa en la tabla principal (Columna 0) usando el nombre (Columna 1)
+        blend_file_path = None
+        for row in range(self.tabla_archivos_blend.rowCount()):
+            item_ruta = self.tabla_archivos_blend.item(row, 0)
+            item_nombre_main = self.tabla_archivos_blend.item(row, 1)
+            if item_nombre_main and item_nombre_main.text() == nombre_archivo:
+                blend_file_path = item_ruta.text()
+                break
+            
+        if not blend_file_path:
+            QMessageBox.critical(self, "Error", f"No se encontró la ruta para '{nombre_archivo}'.")
+            return
         
-        blender_path = self.ent_exe.text().strip()
-        blend_file_path = self.cmb_ruta_blend_a_renderizar.currentText().strip()
+        # 2. Obtener los Widgets y Valores de la Fila de Render
+    
+        # Usamos QTableWidgetItem.text() para los campos de texto
+        carpeta_salida = self.tabla_metadatos_a_renderizar.item(render_row, 4).text()
+        nombre_imagen = self.tabla_metadatos_a_renderizar.item(render_row, 5).text()
+        desde_frame = self.tabla_metadatos_a_renderizar.item(render_row, 7).text()
+        hasta_frame = self.tabla_metadatos_a_renderizar.item(render_row, 8).text()
+
+        # Usamos cellWidget para los QComboBox
+        cmb_motor = self.tabla_metadatos_a_renderizar.cellWidget(render_row, 2)
+        cmb_proceso = self.tabla_metadatos_a_renderizar.cellWidget(render_row, 3)
+        cmb_formato = self.tabla_metadatos_a_renderizar.cellWidget(render_row, 6)
+    
+        if not all([cmb_motor, cmb_proceso, cmb_formato]):
+            QMessageBox.critical(self, "Error", "Faltan widgets de configuración en la tabla.")
+            return
+
+        # Obtener los valores actuales de los ComboBox
+        motor_render = cmb_motor.currentText()
+        proceso_render = cmb_proceso.currentText()
+        formato_img = cmb_formato.currentText()
+
+        # 3. Llamar a la función de renderizado
+        self._start_render_con_params(
+            blend_file_path=blend_file_path,
+            motor=motor_render,
+            proceso=proceso_render,
+            carpeta=carpeta_salida,
+            nombre_img=nombre_imagen,
+            formato=formato_img,
+            frame_s=desde_frame,
+            frame_e=hasta_frame
+        )
+    
+    # Nueva versión de start_render que acepta parámetros de la tabla
+    def _start_render_con_params(self, blend_file_path, motor, proceso, carpeta, nombre_img, formato, frame_s, frame_e):
+        """Inicia el proceso de renderizado de Blender con parámetros explícitos."""
+    
+        blender_path = self.cmb_blend_exe.currentData()
 
         if not blender_path or not os.path.exists(blender_path):
             QMessageBox.warning(self, "Error de Ruta", "Ruta de Blender no válida o vacía.")
             return
-        if not blend_file_path or not os.path.exists(blend_file_path):
-            QMessageBox.warning(self, "Error de Ruta", "Ruta del archivo .blend no válida o vacía.")
-            return
-            
         if self.blender_process.state() == QProcess.Running:
             QMessageBox.information(self, "Proceso Activo", "Un renderizado ya está en curso.")
             return
 
+        # Construir los argumentos con los nuevos parámetros
         command_args = [
             "-b", 
             blend_file_path,
-            #"--python",
-            #self.info_script_path,
             "-y",
-            "-E", f"{self.cmb_engine.currentText()}",
+            "-E", f"{motor}",
             "--debug-all",
-            "-o", f"//{self.ent_carpeta_salida.text()}/{self.ent_nombre_imagen.text()}", 
-            "-F", f"{self.cmb_formato_img.currentText()}", 
-            "-s", f"{self.ent_desde_frame.text()}", 
-            "-e", f"{self.ent_hasta_frame.text()}", 
-            "-a", 
+            "-o", f"//{carpeta}/{nombre_img}", 
+            "-F", f"{formato}", 
+            "-s", f"{frame_s}", 
+            "-e", f"{frame_e}", 
+            "-a", # Comando para iniciar el render
             "--", 
             "--cycles-device", 
-            f"{self.cmb_procesamiento_render.currentText()}",
+            f"{proceso}",
             "--cycles-print-stats",
-            
         ]
-        
+    
         full_command_str = f"'{blender_path}' {' '.join([f'\"{arg}\"' if ' ' in arg else arg for arg in command_args])}"
         self.consola_salida.clear()
         self.consola_salida.append(f"Iniciando Renderizado (DEBUG): **{full_command_str}**")
-        
-        self.btn_renderizar.setEnabled(False)
+    
+        self.btn_renderizar.setEnabled(False) # Bloquear el botón de render general si existe
 
         try:
             self.blender_process.start(blender_path, command_args)
         except Exception as e:
             self.consola_salida.append(f"<span style='color: red;'>Error al intentar iniciar el proceso: {e}</span>")
             self.btn_renderizar.setEnabled(True)
-
-
