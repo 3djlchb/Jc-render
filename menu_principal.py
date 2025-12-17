@@ -91,14 +91,17 @@ class MenuPrincipal(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        # 1. DEFINICIÓN DENTRO DE __init__
-        self.DB_FOLDER = 'bbdd' 
-        self.DB_NAME = 'configuracion.db'
+        self.central_widget = QWidget()  # Contenedor central
+        self.setCentralWidget(self.central_widget)
         
-        # self.DB_FILE contendrá 'bbdd/configuracion.db'
-        self.DB_FILE = os.path.join(self.DB_FOLDER, self.DB_NAME) 
-        
-        self.TABLA_SQL = 'rutas_blender'
+        self.main_layout = QVBoxLayout(self.central_widget)  # Layout principal del contenedor central
+
+        self.notebook = QTabWidget()  # Crear el widget de pestañas (Notebook)
+        self.main_layout.addWidget(self.notebook)
+
+        # Inicializa la lista que guardará las rutas.
+        self.lista_rutas_blend_exe = []
+        self.lista_rutas_blend = []
 
 
         # 🟢 Paso Clave 2: Definir la ruta del script usando la función de arriba
@@ -115,17 +118,16 @@ class MenuPrincipal(QMainWindow):
         self.settings = QSettings("JC", "JcRenderApp")
         self._default_dir = os.path.expanduser("~")  # Inicialización de la variable _default_dir (Solución al AttributeError)
 
-        # --- INICIALIZACION DE QPROCESS
-        self.blender_process = QProcess(self) 
-        self.blender_process.readyReadStandardOutput.connect(self.read_std_output)
-        self.blender_process.readyReadStandardError.connect(self.read_std_error)
-        self.blender_process.finished.connect(self.process_finished) 
+        # Creación de los tabs y widgets
+        self._crear_tabs()
+        
+        # Cargar la configuración persistente
+        self._cargar_configuracion() 
 
-        # --- NUEVO: Proceso para obtener info del archivo ---
+        # --- INICIALIZACION DE QPROCESS
+        self.blender_process = QProcess(self)
         self.info_process = QProcess(self)
-        self.info_process.readyReadStandardOutput.connect(self.read_info_output)
-        self.info_process.readyReadStandardError.connect(self.read_info_error)
-        self.info_process.finished.connect(self.info_process_finished)
+        self.progress_timer = QTimer(self) # <-- ¡ESTA LÍNEA ES CLAVE!
 
         # 🟢 INICIALIZACIÓN FALTANTE: TEMPORIZADOR Y VARIABLES DE ESTADO
         # Buffer para acumular la salida de Blender
@@ -133,30 +135,80 @@ class MenuPrincipal(QMainWindow):
         self._current_process_row = -1 
         self._simulated_progress = 0
 
-        self.progress_timer = QTimer(self) # <-- ¡ESTA LÍNEA ES CLAVE!
+        # 1. DEFINICIÓN DENTRO DE __init__
+        self.DB_FOLDER = 'bbdd' 
+        self.DB_NAME = 'configuracion.db'
+        
+        # self.DB_FILE contendrá 'bbdd/configuracion.db'
+        self.DB_FILE = os.path.join(self.DB_FOLDER, self.DB_NAME) 
+        self.TABLA_SQL = 'rutas_blender'
+
+        # 2. 🔗 Conexiones de Procesos Asíncronos (CRÍTICAS)
+        self._connect_async_processes()
+
+        # 3. 🔗 Conexiones de Eventos de la Interfaz
+        #self._connect_ui_signals()
+
+        # 4. 🚀 Inicialización Final
+        self._initial_load()
+
+    
+    def _connect_async_processes(self):
+
+        self.blender_process.readyReadStandardOutput.connect(self.read_std_output)
+        self.blender_process.readyReadStandardError.connect(self.read_std_error)
+        self.blender_process.finished.connect(self.process_finished) 
+
         self.progress_timer.timeout.connect(self._update_simulated_progress)
 
-        
+        # --- NUEVO: Proceso para obtener info del archivo ---
+        self.info_process.readyReadStandardOutput.connect(self.read_info_output)
+        self.info_process.readyReadStandardError.connect(self.read_info_error)
+        self.info_process.finished.connect(self.info_process_finished)
 
+    
+    def _connect_ui_signals(self):
+        """Conecta los botones, campos de texto y tablas a sus slots."""
         
+        # --- PESTAÑA PRINCIPAL (Carga de Archivos) ---
         
-        self.central_widget = QWidget()  # Contenedor central
-        self.setCentralWidget(self.central_widget)
+        # 1. Selector de Archivo .blend
+        # self.btn_browse_blend.clicked.connect(self._browse_blend_file)
+        # 2. Botón de Carga (Inicia el QProcess de metadatos)
+        self.btn_cargar.clicked.connect(self._cargar_blend_a_tabla) 
         
-        self.main_layout = QVBoxLayout(self.central_widget)  # Layout principal del contenedor central
+        # 3. Clics en la Tabla Principal (para interacción/selección)
+        self.tabla_archivos_blend.cellClicked.connect(self.manejar_clic_celda)
+        # Si tienes la ruta del script guardada:
+        # self.btn_select_script.clicked.connect(self._browse_script_file)
 
-        self.notebook = QTabWidget()  # Crear el widget de pestañas (Notebook)
-        self.main_layout.addWidget(self.notebook)
 
-        # Inicializa la lista que guardará las rutas.
-        self.lista_rutas_blend_exe = []
-        self.lista_rutas_blend = []
-
-        # Creación de los tabs y widgets
-        self._crear_tabs()
+        # --- PESTAÑA DE CONFIGURACIÓN DE BLENDER (Base de Datos) ---
         
-        # Cargar la configuración persistente
-        self._cargar_configuracion() 
+        # 4. Selector de Ejecutable de Blender
+        self.btn_examinar_exe.clicked.connect(self._buscar_blender_exe)
+        # 5. Botón Añadir a DB
+        self.btn_examinar_exe.clicked.connect(self._procesar_y_cargar_db)
+        # 6. Botón Eliminar de DB
+        self.btn_eliminar_exe.clicked.connect(self._eliminar_ruta_seleccionada)
+        
+        
+        # --- PESTAÑA DE RENDERIZADO ---
+        
+        # 7. Disparador de Render (Clic en la columna 9 de la tabla de render)
+        # Aquí conectamos la activación/clic de la celda "Render"
+        self.tabla_metadatos_a_renderizar.cellActivated.connect(self.manejar_activacion_celda_render)
+        
+        # 8. Botón General de Render (Si existe, usar la versión con parámetros)
+        # self.btn_renderizar.clicked.connect(self.start_render) # <-- Si el botón lee los campos de la tabla
+
+
+    def _initial_load(self):
+        """Carga inicial de datos al iniciar la aplicación."""
+        
+        # 1. Cargar las rutas de Blender desde la Base de Datos
+        self._cargar_rutas_blender_db()
+        
 
 
     def _cargar_configuracion(self):
@@ -182,7 +234,7 @@ class MenuPrincipal(QMainWindow):
         self.tab1_iniciar = QWidget()
         self.notebook.addTab(self.tab1_iniciar, "⚙️ Inicio")
         self._setup_tab_iniciar()
-        self._cargar_rutas_blender_db()
+        #self._cargar_rutas_blender_db()
 
         # --- Pestaña 2: Configuración ---
         self.tab2_configurar = QWidget()
@@ -214,11 +266,11 @@ class MenuPrincipal(QMainWindow):
         layout_ejecutables.setContentsMargins(0, 0, 0, 0)
 
         self.ent_blend_exe = QLineEdit()
-        btn_examinar_exe = QPushButton("Examinar")
-        btn_examinar_exe.clicked.connect(self._buscar_blender_exe)
+        self.btn_examinar_exe = QPushButton("Examinar")
+        self.btn_examinar_exe.clicked.connect(self._buscar_blender_exe)
 
         layout_ejecutables.addWidget(self.ent_blend_exe)
-        layout_ejecutables.addWidget(btn_examinar_exe)
+        layout_ejecutables.addWidget(self.btn_examinar_exe)
         
         #----------------------------------------------------------------
         
@@ -227,13 +279,13 @@ class MenuPrincipal(QMainWindow):
         layout_btn_ejecutables.setSpacing(5)
         layout_btn_ejecutables.setContentsMargins(0, 0, 0, 0)
 
-        btn_cargar_exe = QPushButton("Cargar rutas ejecutables blender.exe")
-        btn_examinar_exe.clicked.connect(self._procesar_y_cargar_db)
-        btn_eliminar_exe = QPushButton("Eliminar ruta blender.exe seleccionada")
-        btn_eliminar_exe.clicked.connect(self._eliminar_ruta_seleccionada)
+        self.btn_cargar_exe = QPushButton("Cargar rutas ejecutables blender.exe")
+        self.btn_cargar_exe.clicked.connect(self._procesar_y_cargar_db)
+        self.btn_eliminar_exe = QPushButton("Eliminar ruta blender.exe seleccionada")
+        self.btn_eliminar_exe.clicked.connect(self._eliminar_ruta_seleccionada)
 
-        layout_btn_ejecutables.addWidget(btn_cargar_exe)
-        layout_btn_ejecutables.addWidget(btn_eliminar_exe)
+        layout_btn_ejecutables.addWidget(self.btn_cargar_exe)
+        layout_btn_ejecutables.addWidget(self.btn_eliminar_exe)
 
         #-------------------------------------------------------------------
         # Tabla de guardado de los ejecutables
@@ -425,6 +477,8 @@ class MenuPrincipal(QMainWindow):
         self.tabla_metadatos_a_renderizar.setColumnWidth(8, 100) # Hasta Frame
         self.tabla_metadatos_a_renderizar.setColumnWidth(9, 100) # Render
 
+        self.tabla_metadatos_a_renderizar.cellClicked.connect(self.manejar_activacion_celda_render)
+
         layout_tabla_metadatos_a_renderizar.addWidget(self.tabla_metadatos_a_renderizar)
         layout_tabla_metadatos_a_renderizar.addStretch()
         grupo_tabla_metadatos.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
@@ -518,7 +572,7 @@ class MenuPrincipal(QMainWindow):
 
         # Fila 9: Btn Renderizar
         self.btn_renderizar = QPushButton("🚀 Iniciar Renderizado en Background")
-        self.btn_renderizar.clicked.connect(self.start_render)
+        self.btn_renderizar.clicked.connect(self._start_render_con_params)
         cfg_layout.addWidget(self.btn_renderizar, 3, 0, 1, 15)
 
         # EMPAQUETAMIENTO DE LOS DIFERENTES 
@@ -1038,6 +1092,7 @@ class MenuPrincipal(QMainWindow):
 
     @Slot(int, int)
     def manejar_activacion_celda(self, row, column):
+        print(f"DEBUG: Clic detectado en Fila {row}, Columna {column}")
         """
         Slot que se llama al activar cualquier celda. Filtra por la celda específica (fila X, columna 9).
         """
@@ -1433,6 +1488,7 @@ class MenuPrincipal(QMainWindow):
 
     @Slot(int, int)
     def manejar_activacion_celda_render(self, row, column):
+        print(f"DEBUG: Clic detectado en Fila {row}, Columna {column}")
         """
         Slot que se llama al activar la celda (Fila X, Columna 9) de la tabla de render.
         """
@@ -1441,7 +1497,10 @@ class MenuPrincipal(QMainWindow):
         if column == COLUMNA_RENDER:
             self._preparar_y_lanzar_render(row)
 
+
     def _preparar_y_lanzar_render(self, render_row):
+
+        blender_path = self.cmb_blend_exe.currentData()
         """
         Obtiene la configuración de render de una fila específica de la tabla 
         y ejecuta la función start_render con estos datos.
