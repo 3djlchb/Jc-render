@@ -1,16 +1,19 @@
 import sys
+import os
 from cx_Freeze import setup, Executable 
 
+# Archivos adicionales (Scripts, iconos, carpetas de BBDD)
 archivos_adicionales = [
-    # (Ruta del archivo original, Nombre que tendrá dentro del paquete EXE)
-    # Se recomienda usar el mismo nombre para simplificar la vida
     ("info_archivo_blend.py", "info_archivo_blend.py"),
+    # Si tienes un icono, descomenta la siguiente línea:
+     ("tu_icono.ico", "tu_icono.ico"), 
 ]
 
-## Base (requerida para aplicaciones GUI en Windows)
+## Configuración de la Base para Windows
+# Win32GUI oculta la consola negra al abrir el programa.
 base = None
 if sys.platform == "win32":
-    base = "Win32GUI" # Para aplicaciones PySide/PyQt
+    base = "Win32GUI" 
 
 setup(
     name="jc_render_app",
@@ -18,14 +21,18 @@ setup(
     description="Aplicación de Render de Blender",
     options={
         "build_exe": {
-            # 🟢 PASO CLAVE 1: Incluir el script como archivo de datos
             "include_files": archivos_adicionales,
-            # Asegúrate de incluir los módulos necesarios
-            "packages": ["os", "sys", "json", "PySide6.QtWidgets", "PySide6.QtCore", "PySide6.QtGui"],
-            # Puedes añadir más opciones si es necesario
+            # Es mejor incluir PySide6 completo para evitar que falten librerías internas (plugins de Qt)
+            "packages": ["os", "sys", "json", "sqlite3", "PySide6", "subprocess"],
+            "excludes": ["tkinter", "unittest"], # Reduce el peso del EXE
         }
     },
     executables=[
-        Executable("jc_render.py", base="gui", icon="tu_icono.ico")
+        Executable(
+            "jc_render.py", 
+            base=base,          # 🟢 CORREGIDO: Usa la variable definida arriba
+            target_name="jc_render.exe",
+            icon="tu_icono.ico" # ⚠️ Asegúrate de que el archivo existe o comenta esta línea
+        )
     ]
 )
