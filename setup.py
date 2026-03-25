@@ -7,6 +7,7 @@ if sys.platform == "win32":
     base = "gui"
 
 archivos_adicionales = [
+    ("bbdd/", "bbdd/"),
     ("info_archivo_blend.py", "info_archivo_blend.py"),
     ("jc_render.ico", "jc_render.ico")
 ]

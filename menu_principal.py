@@ -230,9 +230,13 @@ class MenuPrincipal(QWidget):
         self.layout_raiz.addWidget(self.splitter_principal)
 
     def obtener_metadata_pro(self, exe, ruta):
-        """Ejecuta un script de Blender en segundo plano para extraer metadatos"""
-        # Ruta al script que lee los datos (asegúrate de que el nombre coincida)
-        script_extractor = os.path.join(os.path.dirname(__file__), "info_archivo_blend.py")
+        # DETECCIÓN DE RUTA PARA COMPILADO
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(__file__)
+
+        script_extractor = os.path.join(base_dir, "info_archivo_blend.py")
         
         if not os.path.exists(script_extractor):
             self.consola.append(f"❌ Error: No se encuentra '{script_extractor}'")
@@ -387,7 +391,7 @@ class MenuPrincipal(QWidget):
         
         try:
             res = subprocess.run([exe, "-b", "--python-expr", script_check], 
-                                 capture_output=True, text=True, timeout=12,
+                                 capture_output=True, text=True, timeout=15,
                                  creationflags=subprocess.CREATE_NO_WINDOW)
             output = res.stdout
             

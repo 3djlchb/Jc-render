@@ -251,7 +251,7 @@ class PreferenciasDialog(QDialog):
         if not os.path.exists(ruta): return
         tipo = "VINCULADO" if "Program Files" in ruta else "PORTABLE"
         try:
-            res = subprocess.run([ruta, "-v"], capture_output=True, text=True, timeout=5)
+            res = subprocess.run([ruta, "-v"], capture_output=True, text=True, timeout=20)
             version_line = res.stdout.splitlines()[0]
             conn = sqlite3.connect(self.db_path)
             conn.execute("INSERT INTO ejecutables (ruta, version, tipo_instalacion) VALUES (?, ?, ?)", (ruta, version_line, tipo))
