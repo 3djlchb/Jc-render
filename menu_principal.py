@@ -4,6 +4,8 @@ import sqlite3
 import json
 import subprocess
 import datetime
+import sys 
+
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, 
                                QTextEdit, QCheckBox, QGroupBox, QComboBox, QMessageBox,
                                QPushButton, QHBoxLayout, QProgressBar, QApplication, QMenu,
@@ -15,7 +17,16 @@ from PySide6.QtGui import (QColor, QAction, QPixmap, QImageReader)
 class MenuPrincipal(QWidget): 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.db_path = os.path.join(os.path.dirname(__file__), 'bbdd', 'config.db')
+
+        # DETECCIÓN DE RUTA PARA COMPILADO
+        if getattr(sys, 'frozen', False):
+            # Si es el .exe, la base es la carpeta donde está el ejecutable
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # Si es script .py, la base es la carpeta del archivo
+            base_dir = os.path.dirname(__file__)
+
+        self.db_path = os.path.join(base_dir, 'bbdd', 'config.db')
         
         # Procesos
         self.proceso_render = QProcess(self)

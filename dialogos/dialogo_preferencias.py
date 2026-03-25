@@ -3,6 +3,8 @@ import os
 import datetime
 import subprocess
 import re
+import sys
+
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QTabWidget, QWidget, 
                                QLineEdit, QPushButton, QFormLayout, QHBoxLayout, 
                                QMessageBox, QFileDialog, QTableWidget, QTableWidgetItem, 
@@ -16,7 +18,19 @@ class PreferenciasDialog(QDialog):
         self.setWindowTitle("Gestor Inteligente de Blender - Configuración Pro")
         self.resize(1100, 850)
         
-        self.db_path = os.path.join('bbdd', 'config.db')
+        # --- CORRECCIÓN DE RUTA PARA .EXE COMPILADO ---
+        if getattr(sys, 'frozen', False):
+            # Ruta cuando es un ejecutable (.exe)
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # Ruta cuando es un script de Python (.py)
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            
+        self.db_path = os.path.join(base_dir, 'bbdd', 'config.db')
+        
+        # Asegurar que la carpeta 'bbdd' existe antes de inicializar la BD
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+
         self._inicializar_bd()
 
         # PERSISTENCIA: Recordar la última carpeta explorada
