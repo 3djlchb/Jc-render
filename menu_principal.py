@@ -96,6 +96,11 @@ class MenuPrincipal(QWidget):
         
         self.tabla_metadatos.itemDoubleClicked.connect(self.abrir_con_blender_desde_tabla) # <--- AÑADIR ESTO
 
+        # --- Para Tabla Metadatos ---
+        self.tabla_metadatos.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tabla_metadatos.customContextMenuRequested.connect(self.mostrar_menu_contextual)
+        self.tabla_metadatos.itemDoubleClicked.connect(self.abrir_con_blender_desde_tabla)
+
         anchos_meta = [200, 100, 100, 180, 55, 55, 55, 55, 55, 300]
         for i, ancho_m in enumerate(anchos_meta):
             self.tabla_metadatos.setColumnWidth(i, ancho_m)
@@ -109,7 +114,12 @@ class MenuPrincipal(QWidget):
             "Sel", "Archivo", "Blender", "Motor", "Disp", "Carpeta Out", 
             "Nombre Out", "Formato", "Desde", "Hasta", "PROGRESO", "ACCIÓN"
         ])
+
         self.tabla_renderizar.itemDoubleClicked.connect(self.abrir_con_blender_desde_tabla) # <--- AÑADIR ESTO
+        # --- Para Tabla Renderizado ---
+        self.tabla_renderizar.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tabla_renderizar.customContextMenuRequested.connect(self.mostrar_menu_contextual)
+        self.tabla_renderizar.itemDoubleClicked.connect(self.abrir_con_blender_desde_tabla)
 
         anchos_renderizado = [30, 200, 100, 100, 100, 80, 150, 80, 55, 55, 120, 120]
         for j, ancho_r in enumerate(anchos_renderizado):
@@ -530,8 +540,42 @@ class MenuPrincipal(QWidget):
 
 
     def sincronizar_todo_desde_principal(self):
-        self.cargar_datos_desde_db()
-        self.consola.append("🔄 Vista refrescada.")
+        """Escanea el disco en busca de cambios y luego refresca las tablas"""
+        self.consola.append("🔍 Iniciando sincronización de archivos en disco...")
+        self.btn_sync.setEnabled(False) # Bloqueamos para evitar clics dobles
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 1. Obtener las rutas base que el usuario configuró en preferencias
+            # Asumimos que guardas las rutas a buscar en una tabla 'config_rutas' o similar
+            # Si no, podemos obtener las carpetas de los proyectos actuales para re-escanearlas
+            proyectos_actuales = cursor.execute("SELECT carpeta FROM proyectos").fetchall()
+            
+            # 2. Lógica de re-escaneo (Verificar si los archivos existen y sus fechas)
+            for (ruta,) in proyectos_actuales:
+                if os.path.exists(ruta):
+                    mtime = os.path.getmtime(ruta)
+                    fecha_mod = datetime.datetime.fromtimestamp(mtime).strftime('%d/%m/%Y %H:%M')
+                    
+                    # Actualizamos la fecha de modificación en la DB si cambió
+                    cursor.execute("UPDATE proyectos SET fecha_mod = ? WHERE carpeta = ?", (fecha_mod, ruta))
+                else:
+                    self.consola.append(f"⚠️ Archivo no encontrado: {os.path.basename(ruta)}")
+
+            conn.commit()
+            conn.close()
+            
+            # 3. Refrescar la interfaz
+            self.cargar_datos_desde_db()
+            self.consola.append("✅ Sincronización completada y vista actualizada.")
+            
+        except Exception as e:
+            self.consola.append(f"❌ Error durante la sincronización: {e}")
+        
+        finally:
+            self.btn_sync.setEnabled(True)
 
 
     def verificar_cambios_al_inicio(self):
@@ -584,6 +628,68 @@ class MenuPrincipal(QWidget):
                 QMessageBox.critical(self, "Error", f"No se pudo abrir Blender: {e}")
         else:
             QMessageBox.warning(self, "Configuración", "No hay ejecutables de Blender registrados en Preferencias.")
+
+
+    def mostrar_menu_contextual(self, pos):
+        tabla_activa = self.sender()
+        item = tabla_activa.itemAt(pos)
+        if not item: return
+
+        fila = item.row() # Obtenemos el índice de la fila
+        menu = QMenu()
+
+        # Abrir...
+        accion_abrir = QAction("🚀 Abrir en Blender", self)
+        accion_abrir.triggered.connect(lambda: self.abrir_con_blender_desde_tabla(item))
+        menu.addAction(accion_abrir)
+
+        menu.addSeparator()
+
+        # Eliminar...
+        accion_eliminar = QAction("❌ Eliminar de todas las tablas", self)
+        # Aquí conectamos a la función global usando la fila detectada
+        accion_eliminar.triggered.connect(lambda: self.eliminar_proyecto_global(fila))
+        menu.addAction(accion_eliminar)
+
+        menu.exec(tabla_activa.mapToGlobal(pos))
+
+
+    def eliminar_proyecto_global(self, fila):
+        # 1. Obtener la ruta única (fuente de verdad) de la tabla de metadatos
+        # Aunque hagas clic en la tabla de renderizado, usamos el índice de fila 
+        # para sacar la ruta de la tabla de metadatos (Columna 9)
+        item_ruta = self.tabla_metadatos.item(fila, 9)
+        if not item_ruta: return
+        
+        ruta_blend = item_ruta.text()
+        nombre = os.path.basename(ruta_blend)
+
+        # 2. Confirmación de seguridad
+        confirmar = QMessageBox.question(
+            self, "Eliminar Proyecto",
+            f"¿Deseas quitar '{nombre}' del gestor?\n\n"
+            "Se eliminarán sus metadatos y configuración de renderizado de todas las listas.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if confirmar == QMessageBox.Yes:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                # IMPORTANTE: Sin esta línea, el ON DELETE CASCADE no se activa en SQLite
+                conn.execute("PRAGMA foreign_keys = ON") 
+                
+                # 3. Borrado en la tabla principal
+                conn.execute("DELETE FROM proyectos WHERE carpeta = ?", (ruta_blend,))
+                
+                conn.commit()
+                conn.close()
+
+                # 4. Refresco total de la UI
+                self.cargar_datos_desde_db() 
+                self.consola.append(f"🗑️ Proyecto eliminado de la base de datos: {nombre}")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"No se pudo eliminar el registro: {e}")
 
 
     def leer_consola_blender(self):
