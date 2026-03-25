@@ -21,80 +21,59 @@ from PySide6.QtCore import (Qt, QStringListModel, QSettings, QProcess, Slot)
 
 # IMPORTACIÓN DE LOS MODULOS CREADOS
 from menu_principal import MenuPrincipal
+from dialogos.dialogo_preferencias import PreferenciasDialog
 
 
 ICONO_ARCHIVO = "jc_render.ico"
 
 
-class JcRender(MenuPrincipal):
-
+class JcRender(QMainWindow): # HEREDA DE QMainWindow
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JC Render")
-        self.resize(1400, 900)
+        self.setWindowTitle("JC Render - Batch Manager Pro")
+        self.resize(1600, 900)
         
-        try:
-            # 1. Crear una instancia de QIcon desde el archivo .ico
-            app_icon = QIcon(ICONO_ARCHIVO)
-            
-            # 2. Establecer el icono de la ventana principal
-            self.setWindowIcon(app_icon)
-            
-            # También puedes hacerlo en una sola línea:
-            # self.setWindowIcon(QIcon(ICONO_ARCHIVO))
-            
-        except Exception as e:
-            print(f"Error al cargar el icono: {e}")
-            print(f"Asegúrate de que el archivo '{ICONO_ARCHIVO}' exista.")
+        # 1. ESTABLECER EL CONTENIDO (Lógica de menu_principal)
+        # Al hacer esto, JcRender tiene acceso a 'self.contenido.cargar_datos_desde_db()'
+        self.contenido = MenuPrincipal(self)
+        self.setCentralWidget(self.contenido)
 
-        #LLAMADO DE LA FUNCIONES PROPIAS DE LA CLASE
+        # 2. CONFIGURAR INTERFAZ
+        if os.path.exists(ICONO_ARCHIVO):
+            self.setWindowIcon(QIcon(ICONO_ARCHIVO))
+        
         self._crear_menu()
 
-
     def _crear_menu(self):
-        self.menu_bar = QMenuBar(self) # Creación del menu general
-        self.setMenuBar(self.menu_bar)  # Empaquetamiento del menubar en el layout principal
+        # Ahora setMenuBar funcionará porque JcRender es un QMainWindow
+        self.barra_menu = self.menuBar() 
 
-        #---MENÚ ARCHIVO
-        self.menu_archivo = QMenu("&Archivo", self)
-        #---MENÚ ARCHIVO: Submenús
-        self.menu_archivo_nuevo = self.menu_archivo.addAction("&Nuevo")
-        self.menu_archivo_abrir = self.menu_archivo.addAction("&Abrir")
-        self.menu_archivo.addSeparator()
-        self.menu_archivo_salir = self.menu_archivo.addAction("&Salir")
+        # Menú Archivo
+        menu_archivo = self.barra_menu.addMenu("&Archivo")
+        menu_archivo.addAction("&Salir", self.close)
 
-        #---MENÚ EDICIÓN
-        self.menu_edicion = QMenu("&Edición", self)
-        #---MENÚ EDICIÓN: Submenús
-        self.menu_edicion_deshacer = self.menu_edicion.addAction("&Deshacer")
-        self.menu_edicion_rehacer = self.menu_edicion.addAction("&Rehacer")
-        self.menu_edicion.addSeparator()
-        self.menu_edicion_preferencias = self.menu_edicion.addAction("&Preferencias")
+        # Menú Edición
+        menu_edicion = self.barra_menu.addMenu("&Edición")
+        acc_pref = menu_edicion.addAction("&Preferencias")
+        acc_pref.triggered.connect(self._abrir_preferencias)
 
-        #---MENÚ HERRAMIENTAS
-        self.menu_herramientas = QMenu("&Herramientas", self)
-        #---MENÚ HERRAMIENTAS: Submenús
-        self.menu_herramientas_1 = self.menu_herramientas.addAction("&Herramienta 1")
-        self.menu_herramientas_2 = self.menu_herramientas.addAction("&Herramienta 2")
-        self.menu_herramientas.addSeparator()
-        self.menu_herramientas_3 = self.menu_herramientas.addAction("&Herramienta 3")
-
-        #---MENÚ AYUDA
-        self.menu_ayuda = QMenu("&Ayuda", self)
-        #---MENÚ AYUDA: Submenús
-        self.menu_ayuda_documentacion = self.menu_ayuda.addAction("&Documentación")
-        self.menu_ayuda_acerca = self.menu_ayuda.addAction("&Acerca de ...")
+        # Menú Ayuda
+        menu_ayuda = self.barra_menu.addMenu("&Ayuda")
+        menu_ayuda.addAction("&Acerca de...")
 
 
-        # EMPAQUETAMIENTO DE LOS MENÚS EN LA BARRA DE MENÚS
-        self.menu_bar.addMenu(self.menu_archivo)
-        self.menu_bar.addMenu(self.menu_edicion)
-        self.menu_bar.addMenu(self.menu_herramientas)
-        self.menu_bar.addMenu(self.menu_ayuda)
-
-
-    def info_archivo_blend(self):
-        pass
+    def _abrir_preferencias(self):
+        try:
+            print("Intentando abrir preferencias...") # Debug en consola
+            dialogo = PreferenciasDialog(self)
+            
+            # exec() devuelve QDialog.Accepted (1) si el usuario pulsa Aceptar/Guardar
+            if dialogo.exec():
+                print("Preferencias cerradas con éxito. Recargando base de datos...")
+                self.contenido.cargar_datos_desde_db()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo abrir el diálogo: {str(e)}")
+        
 
 
 

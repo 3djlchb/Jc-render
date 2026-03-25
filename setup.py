@@ -1,38 +1,36 @@
 import sys
-import os
-from cx_Freeze import setup, Executable 
+from cx_Freeze import setup, Executable
 
-# Archivos adicionales (Scripts, iconos, carpetas de BBDD)
-archivos_adicionales = [
-    ("info_archivo_blend.py", "info_archivo_blend.py"),
-    # Si tienes un icono, descomenta la siguiente línea:
-     ("tu_icono.ico", "tu_icono.ico"), 
-]
-
-## Configuración de la Base para Windows
-# Win32GUI oculta la consola negra al abrir el programa.
+# Definición de la base para evitar el error de Python 3.13
 base = None
 if sys.platform == "win32":
-    base = "Win32GUI" 
+    base = "gui"
+
+archivos_adicionales = [
+    ("info_archivo_blend.py", "info_archivo_blend.py"),
+    ("jc_render.ico", "jc_render.ico")
+]
+
+build_exe_options = {
+    "include_files": archivos_adicionales,
+    "packages": ["os", "sys", "json", "sqlite3", "PySide6", "subprocess"],
+    "include_msvcr": True,
+    #ESTO ES CLAVE: Evita que las librerías se metan en un .zip interno
+    # permitiendo que BASE_DIR funcione siempre.
+    "zip_include_packages": [], 
+    "zip_exclude_packages": ["*"],
+}
 
 setup(
     name="jc_render_app",
-    version="0.1.2",
-    description="Aplicación de Render de Blender",
-    options={
-        "build_exe": {
-            "include_files": archivos_adicionales,
-            # Es mejor incluir PySide6 completo para evitar que falten librerías internas (plugins de Qt)
-            "packages": ["os", "sys", "json", "sqlite3", "PySide6", "subprocess"],
-            "excludes": ["tkinter", "unittest"], # Reduce el peso del EXE
-        }
-    },
+    version="0.1.3",
+    options={"build_exe": build_exe_options},
     executables=[
         Executable(
-            "jc_render.py", 
-            base=base,          # 🟢 CORREGIDO: Usa la variable definida arriba
+            "jc_render.py",
+            base=base, # Aquí pasamos la variable
             target_name="jc_render.exe",
-            icon="tu_icono.ico" # ⚠️ Asegúrate de que el archivo existe o comenta esta línea
+            icon="jc_render.ico"
         )
     ]
 )

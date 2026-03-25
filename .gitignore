@@ -1,0 +1,37 @@
+# --- Compilación y Ejecutables (Esto causó tu error anterior) ---
+build/
+dist/
+*.exe
+*.dll
+*.msi
+*.so
+
+# --- Entornos Virtuales ---
+venv/
+.venv/
+env/
+bin/
+include/
+lib/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+
+# --- Interfaz de Usuario (Opcional) ---
+# Si prefieres que otros compilen sus propios .ui a .py
+# *.ui
+# *.qrc
+
+# --- Sistema y Editores ---
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# --- Logs y Base de Datos locales ---
+*.log
+*.sqlite
