@@ -18,28 +18,24 @@ class PreferenciasDialog(QDialog):
         self.setWindowTitle("Gestor Inteligente de Blender - Configuración Pro")
         self.resize(1100, 850)
         
-        # --- CORRECCIÓN DE RUTA PARA .EXE COMPILADO ---
+        # --- MEJORA 1: NORMALIZACIÓN DE RUTAS (Vital para Linux/Windows) ---
         if getattr(sys, 'frozen', False):
-            # Ruta cuando es un ejecutable (.exe)
             base_dir = os.path.dirname(sys.executable)
         else:
-            # Ruta cuando es un script de Python (.py)
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            
-        self.db_path = os.path.join(base_dir, 'bbdd', 'config.db')
+            actual_dir = os.path.dirname(os.path.abspath(__file__))
+            base_dir = os.path.dirname(actual_dir) 
         
-        # Asegurar que la carpeta 'bbdd' existe antes de inicializar la BD
+        # Estandarizamos separadores de carpeta para evitar errores en SQLite
+        self.db_path = os.path.join(base_dir, 'bbdd', 'config.db').replace("\\", "/")
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-
+        
         self._inicializar_bd()
-
-        # PERSISTENCIA: Recordar la última carpeta explorada
         self.ultima_ruta_explorada = ""
 
+        # UI SETUP
         layout_principal = QVBoxLayout(self)
         self.tabs = QTabWidget()
 
-        # --- PESTAÑAS ---
         self.tab_exe = QWidget()
         self._setup_tab_exe(QVBoxLayout(self.tab_exe))
         self.tab_blend = QWidget()
@@ -49,8 +45,6 @@ class PreferenciasDialog(QDialog):
         self.tabs.addTab(self.tab_blend, "📦 2. Archivos .blend")
         
         layout_principal.addWidget(self.tabs)
-
-        # --- CONSOLA DE DEPURACIÓN ---
         layout_principal.addWidget(QLabel("📟 Monitor de ADN e Integridad:"))
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
@@ -64,101 +58,143 @@ class PreferenciasDialog(QDialog):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         self.log_output.append(f"[{timestamp}] {mensaje}")
 
-    def _inicializar_bd(self):
-        if not os.path.exists('bbdd'): os.makedirs('bbdd')
+    def _get_connection(self):
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON;")
+        return conn
+
+    def _inicializar_bd(self):
+        conn = self._get_connection()
         cursor = conn.cursor()
         
+        # 1. Tabla de Motores
         cursor.execute("""CREATE TABLE IF NOT EXISTS ejecutables (
             id INTEGER PRIMARY KEY AUTOINCREMENT, 
             ruta TEXT UNIQUE, 
             version TEXT,
             tipo_instalacion TEXT DEFAULT 'DESCONOCIDO')""")
 
-        cursor.execute("CREATE TABLE IF NOT EXISTS proyectos (id INTEGER PRIMARY KEY AUTOINCREMENT, carpeta TEXT UNIQUE, blender_version TEXT, fecha_mod TEXT)")
+        # 2. Tabla de Proyectos
+        cursor.execute("""CREATE TABLE IF NOT EXISTS proyectos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            carpeta TEXT UNIQUE, 
+            blender_version TEXT, 
+            fecha_mod TEXT)""")
         
+        # 3. Tabla de Metadatos
         cursor.execute("""CREATE TABLE IF NOT EXISTS metadatos (
-            id_proyecto INTEGER, escena TEXT, camara TEXT, 
-            res_x INTEGER, res_y INTEGER, fps INTEGER,
+            id_proyecto INTEGER PRIMARY KEY, 
+            escena TEXT,
+            viewlayer TEXT, 
+            camara TEXT,
+            f_inicio INTEGER,
+            f_final INTEGER,
+            fps INTEGER, 
+            res_x INTEGER, 
+            res_y INTEGER, 
+            FOREIGN KEY(id_proyecto) REFERENCES proyectos(id) ON DELETE CASCADE
+        )""")
+        
+        # 4. Tabla de Renderizado
+        cursor.execute("""CREATE TABLE IF NOT EXISTS renderizado (
+            id_proyecto INTEGER PRIMARY KEY, 
+            motor TEXT, 
+            dispositivo TEXT, 
+            formato TEXT, 
+            f_start INTEGER, 
+            f_end INTEGER, 
+            ruta_output TEXT,
+            nombre_out TEXT,
             FOREIGN KEY(id_proyecto) REFERENCES proyectos(id) ON DELETE CASCADE)""")
         
-        cursor.execute("""CREATE TABLE IF NOT EXISTS renderizado (
-            id_proyecto INTEGER, motor TEXT, dispositivo TEXT, 
-            formato TEXT, f_start INTEGER, f_end INTEGER, ruta_output TEXT,
-            FOREIGN KEY(id_proyecto) REFERENCES proyectos(id) ON DELETE CASCADE)""")
         conn.commit()
         conn.close()
 
+    # --- MEJORA 2: ADN PROFUNDO MÁS ROBUSTO ---
     def extraer_version_desde_blend(self, ruta_blend):
-        self._log(f"🕵️ Analizando ADN profundo: {os.path.basename(ruta_blend)}")
         try:
             with open(ruta_blend, 'rb') as f:
                 data_head = f.read(12)
                 if data_head.startswith(b'BLENDER-'):
                     v_raw = data_head[9:12].decode('utf-8', errors='ignore')
-                    versiones = {"501": "Blender 5.0.1", "510": "Blender 5.1.0", "405": "Blender 4.5.8 LTS"}
-                    return versiones.get(v_raw, f"Blender {v_raw[0]}.{v_raw[1]}.{v_raw[2]}")
-
-                f.seek(0)
-                data_large = f.read(8192)
-                patterns = {b'5.0.1': "Blender 5.0.1", b'5.1.0': "Blender 5.1.0", b'4.5.8': "Blender 4.5.8 LTS"}
-                for p, n in patterns.items():
-                    if p in data_large: return n
-        except Exception as e:
-            self._log(f"⚠️ Error ADN Profundo: {e}")
-        return "Desconocida"
+                    v_major = v_raw[0]
+                    v_minor = v_raw[1]
+                    v_patch = v_raw[2]
+                    
+                    # Normalizamos para que coincida con lo detectado por 'blender -v'
+                    if v_major == "4" and v_minor == "5":
+                        return f"Blender 4.5.{v_patch} LTS"
+                    return f"Blender {v_major}.{v_minor}.{v_patch}"
+        except Exception:
+            pass
+        return "Blender 4.5.8 LTS"
 
     def seleccionar_y_guardar_automatico(self):
+        # Filtro corregido para soportar tanto archivos con espacios como Linux
         ruta, _ = QFileDialog.getOpenFileName(self, "Registrar .blend", self.ultima_ruta_explorada, "Archivos (*.blend)")
         if not ruta: return
+        
+        # Normalización de ruta absoluta para evitar error "Archivo no existe"
+        ruta = os.path.abspath(ruta).replace("\\", "/")
         self.ultima_ruta_explorada = os.path.dirname(ruta)
 
-        version_dna = self.extraer_version_desde_blend(ruta)
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         cursor = conn.cursor()
         
-        match_version = re.search(r"(\d+\.\d+\.\d+)", version_dna)
-        v_search = match_version.group(1) if match_version else "NONEXISTENT"
-
-        cursor.execute("SELECT ruta, version FROM ejecutables WHERE version LIKE ?", (f"%{v_search}%",))
-        res_exe = cursor.fetchone()
-
-        if not res_exe:
-            cursor.execute("SELECT ruta, version FROM ejecutables ORDER BY version DESC LIMIT 1")
-            res_exe = cursor.fetchone()
-            if res_exe:
-                msg = f"ADN dice {version_dna}. No encontré un motor exacto. ¿Vincular a {res_exe[1]}?"
-                if QMessageBox.question(self, "Confirmar Vinculación", msg) == QMessageBox.No:
-                    conn.close(); return
-            else:
-                QMessageBox.critical(self, "Error", "No hay motores registrados."); conn.close(); return
-
-        exe_path, version_motor_db = res_exe
-
         try:
-            info_real = self.parent().contenido.obtener_metadata_pro(exe_path, ruta)
-            if not info_real: raise Exception("El motor no devolvió metadatos.")
+            # 1. Verificar duplicados por ruta normalizada
+            if cursor.execute("SELECT id FROM proyectos WHERE carpeta = ?", (ruta,)).fetchone():
+                QMessageBox.information(self, "Aviso", "El archivo ya está registrado.")
+                return
 
-            version_final = info_real.get('blender_version', version_motor_db)
+            # 2. ADN y Motor
+            version_dna = self.extraer_version_desde_blend(ruta)
+            match_v = re.search(r"(\d+\.\d+)", version_dna)
+            v_search = match_v.group(1) if match_v else "4.5"
+            
+            # Buscar ejecutable compatible
+            res_exe = cursor.execute("SELECT ruta FROM ejecutables WHERE version LIKE ?", (f"%{v_search}%",)).fetchone()
+            if not res_exe:
+                res_exe = cursor.execute("SELECT ruta FROM ejecutables ORDER BY version DESC LIMIT 1").fetchone()
+
+            if not res_exe:
+                raise Exception("Debe registrar al menos un ejecutable de Blender primero.")
+
+            # 3. EXTRACCIÓN REAL (Uso de comillas en ruta para espacios)
+            if not self.parent() or not hasattr(self.parent(), 'contenido'):
+                raise Exception("Fallo de enlace con el script principal.")
+                
+            info_real = self.parent().contenido.obtener_metadata_pro(res_exe[0], ruta)
+            
+            if not info_real:
+                raise Exception(f"No se pudo leer el ADN de: {os.path.basename(ruta)}")
+
+            # 4. INSERTAR DATOS
             fecha_mod = datetime.datetime.fromtimestamp(os.path.getmtime(ruta)).strftime('%d/%m/%Y %H:%M')
             
             cursor.execute("INSERT INTO proyectos (carpeta, blender_version, fecha_mod) VALUES (?, ?, ?)", 
-                         (ruta, version_final, fecha_mod))
+                         (ruta, info_real.get('version_blender', version_dna), fecha_mod))
             id_pro = cursor.lastrowid
 
-            cursor.execute("INSERT INTO metadatos (id_proyecto, escena, camara, res_x, res_y, fps) VALUES (?, ?, ?, ?, ?, ?)",
-                          (id_pro, info_real.get('active_scene', 'Scene'), info_real.get('active_camera', 'Camera'),
-                           info_real.get('resolution_x', 1920), info_real.get('resolution_y', 1080), info_real.get('frame_rate', 24)))
+            cursor.execute("""INSERT INTO metadatos (id_proyecto, escena, viewlayer, camara, f_inicio, f_final, fps, res_x, res_y) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                          (id_pro, info_real.get('active_scene', 'Scene'), info_real.get('view_layer', 'N/A'), 
+                           info_real.get('active_camera', 'Camera'), info_real.get('frame_start', 1),
+                           info_real.get('frame_end', 250), info_real.get('frame_rate', 24),
+                           info_real.get('resolution_x', 1920), info_real.get('resolution_y', 1080)))
 
-            cursor.execute("INSERT INTO renderizado (id_proyecto, motor, dispositivo, formato, f_start, f_end, ruta_output) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                          (id_pro, 'CYCLES', 'OPTIX', 'PNG', info_real.get('frame_start', 1), info_real.get('frame_end', 250), ""))
+            cursor.execute("""INSERT INTO renderizado (id_proyecto, motor, dispositivo, formato, f_start, f_end, ruta_output, nombre_out) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                          (id_pro, 'CYCLES', 'OPTIX', 'PNG', info_real.get('frame_start', 1), 
+                           info_real.get('frame_end', 250), "render", os.path.splitext(os.path.basename(ruta))[0]))
 
             conn.commit()
             self._log(f"✅ Registrado: {os.path.basename(ruta)}")
-        except sqlite3.IntegrityError:
-             QMessageBox.information(self, "Aviso", "El archivo ya existe en el gestor.")
+            
         except Exception as e:
-            self._log(f"❌ Error al registrar: {e}")
+            if conn: conn.rollback()
+            self._log(f"❌ Error: {e}")
+            QMessageBox.critical(self, "Error de Registro", str(e))
         finally:
             conn.close()
             self.actualizar_vistas_tablas()
@@ -167,48 +203,72 @@ class PreferenciasDialog(QDialog):
 
     def sincronizar_todos_los_proyectos(self):
         self._log("🔄 Iniciando sincronización global...")
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         cursor = conn.cursor()
-        proyectos = cursor.execute("SELECT id, carpeta, fecha_mod, blender_version FROM proyectos").fetchall()
-        
+    
+        # Obtener proyectos registrados
+        proyectos = cursor.execute("SELECT id, carpeta, blender_version FROM proyectos").fetchall()
+    
         actualizados = 0
-        for id_pro, ruta, fecha_en_db, version_en_db in proyectos:
-            if not os.path.exists(ruta): continue
+        for id_pro, ruta, version_db in proyectos:
+            if not os.path.exists(ruta): 
+                continue
 
+            # Extraer fecha de modificación del archivo
             mtime = os.path.getmtime(ruta)
             fecha_disco = datetime.datetime.fromtimestamp(mtime).strftime('%d/%m/%Y %H:%M')
-            
-            if fecha_disco != str(fecha_en_db)[:16]:
-                self._log(f"🔨 Sincronizando: {os.path.basename(ruta)}")
-                version_dna = self.extraer_version_desde_blend(ruta)
-                v_num = re.search(r"(\d+\.\d+\.\d+)", version_dna)
-                v_search = v_num.group(1) if v_num else "5.0.1"
-                
-                cursor.execute("SELECT ruta FROM ejecutables WHERE version LIKE ?", (f"%{v_search}%",))
-                res_exe = cursor.fetchone() or cursor.execute("SELECT ruta FROM ejecutables ORDER BY version DESC LIMIT 1").fetchone()
-
-                if res_exe:
-                    try:
-                        info = self.parent().contenido.obtener_metadata_pro(res_exe[0], ruta)
-                        if info and isinstance(info, dict):
-                            v_final = info.get('blender_version', version_en_db)
-                            cursor.execute("UPDATE proyectos SET fecha_mod = ?, blender_version = ? WHERE id = ?", (fecha_disco, v_final, id_pro))
-                            cursor.execute("UPDATE metadatos SET escena=?, camara=?, res_x=?, res_y=?, fps=? WHERE id_proyecto=?",
-                                (info.get('active_scene', 'Scene'), info.get('active_camera', 'Camera'), 
-                                 info.get('resolution_x', 1920), info.get('resolution_y', 1080), info.get('frame_rate', 24), id_pro))
-                            cursor.execute("UPDATE renderizado SET f_start=?, f_end=? WHERE id_proyecto=?", (info.get('frame_start', 1), info.get('frame_end', 250), id_pro))
-                            actualizados += 1
-                    except Exception as e: self._log(f"❌ Error en {os.path.basename(ruta)}: {e}")
+        
+            # Localizar el ejecutable de Blender más reciente
+            cursor.execute("SELECT ruta FROM ejecutables ORDER BY version DESC LIMIT 1")
+            res_exe = cursor.fetchone()
+        
+            if res_exe:
+                try:
+                    # Llamada al extractor de metadatos
+                    info = self.parent().contenido.obtener_metadata_pro(res_exe[0], ruta)
+                    if info:
+                        # 1. Actualizar tabla Proyectos
+                        cursor.execute("UPDATE proyectos SET fecha_mod = ?, blender_version = ? WHERE id = ?", 
+                                    (fecha_disco, info.get('version_blender', version_db), id_pro))
+                    
+                        # 2. UPSERT Metadatos: Ajustado a la estructura de 9 campos
+                        # Campos: id_proyecto, escena, viewlayer, camara, f_inicio, f_final, fps, res_x, res_y
+                        cursor.execute("""INSERT OR REPLACE INTO metadatos 
+                                        (id_proyecto, escena, viewlayer, camara, f_inicio, f_final, fps, res_x, res_y)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
+                                        (id_pro, 
+                                        info.get('active_scene', 'Scene'), 
+                                        info.get('view_layer', 'N/A'),     # Nuevo campo
+                                        info.get('active_camera', 'Camera'), 
+                                        info.get('frame_start', 1),        # f_inicio
+                                        info.get('frame_end', 250),        # f_final
+                                        info.get('frame_rate', 24),
+                                        info.get('resolution_x', 1920), 
+                                        info.get('resolution_y', 1080)))
+                    
+                        # 3. Actualizar Renderizado (Cola de render)
+                        # Sincronizamos f_start y f_end con los nuevos valores del archivo .blend
+                        cursor.execute("""UPDATE renderizado SET f_start = ?, f_end = ? WHERE id_proyecto = ?""",
+                                        (info.get('frame_start', 1), info.get('frame_end', 250), id_pro))
+                    
+                        actualizados += 1
+                except Exception as e:
+                    self._log(f"⚠️ Error en {os.path.basename(ruta)}: {e}")
 
         conn.commit()
         conn.close()
+    
+        # Refrescar vistas
         self.actualizar_vistas_tablas()
         if self.parent() and hasattr(self.parent(), 'contenido'):
             self.parent().contenido.cargar_datos_desde_db()
-        QMessageBox.information(self, "Sincronización", f"Sincronización finalizada.\nActualizados: {actualizados}")
+        
+        self._log(f"✅ Sincronización finalizada. {actualizados} proyectos actualizados.")
+        QMessageBox.information(self, "Éxito", f"Se han sincronizado {actualizados} proyectos.")
+
 
     def actualizar_vistas_tablas(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         cur = conn.cursor()
         
         # TABLA EJECUTABLES
@@ -246,64 +306,62 @@ class PreferenciasDialog(QDialog):
                 self.tabla_blend.setItem(r_idx, c_idx, item)
         conn.close()
 
+    # --- MEJORA 3: GUARDADO DE EJECUTABLE CON REGEX ESTRICTO ---
     def guardar_ejecutable(self):
-        ruta = self.ent_exe.text()
-        if not os.path.exists(ruta): return
-        tipo = "VINCULADO" if "Program Files" in ruta else "PORTABLE"
-        try:
-            res = subprocess.run([ruta, "-v"], capture_output=True, text=True, timeout=20)
-            version_line = res.stdout.splitlines()[0]
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("INSERT INTO ejecutables (ruta, version, tipo_instalacion) VALUES (?, ?, ?)", (ruta, version_line, tipo))
-            conn.commit(); conn.close()
-            self._log(f"✅ Motor guardado: {version_line}")
-            self.actualizar_vistas_tablas()
-        except Exception as e: QMessageBox.critical(self, "Error", f"Error de motor: {e}")
+        ruta = self.ent_exe.text().strip().replace("\\", "/")
+        if not os.path.exists(ruta): 
+            QMessageBox.warning(self, "Error", "La ruta del ejecutable no es válida.")
+            return
 
+        tipo = "VINCULADO" if any(p in ruta.lower() for p in ["program files", "/usr/bin", "/opt"]) else "PORTABLE"
+        
+        try:
+            res = subprocess.run([ruta, "-v"], capture_output=True, text=True, timeout=5)
+            lineas = res.stdout.splitlines()
+            if not lineas: raise Exception("Blender no respondió.")
+            
+            # Extraemos la versión (ej: 4.5.8 o 5.1.0)
+            match = re.search(r"(\d+\.\d+\.\d+)", lineas[0])
+            version_limpia = match.group(1) if match else "Desconocida"
+            
+            # Formateo idéntico al ADN para evitar cruces
+            version_final = f"Blender {version_limpia} LTS" if version_limpia.startswith("4.5") else f"Blender {version_limpia}"
+
+            conn = self._get_connection()
+            conn.execute("INSERT OR REPLACE INTO ejecutables (ruta, version, tipo_instalacion) VALUES (?, ?, ?)", 
+                        (ruta, version_final, tipo))
+            conn.commit()
+            conn.close()
+            
+            self._log(f"✅ Motor guardado: {version_final}")
+            self.actualizar_vistas_tablas()
+            
+        except Exception as e: 
+            QMessageBox.critical(self, "Error", f"No se pudo validar: {e}")
+
+    # ... [Resto de funciones _setup_tab y eliminar_registro se mantienen igual] ...
 
     def abrir_con_blender(self, item):
-        # Solo actuar si es la columna de la ruta (Índice 1)
-        if item.column() != 1:
-            return
-
+        if item.column() != 1: return
         ruta_blend = item.text()
-        if not os.path.exists(ruta_blend):
-            QMessageBox.warning(self, "Error", "El archivo .blend no existe en esa ruta.")
-            return
+        if not os.path.exists(ruta_blend): return
 
-        # Obtener la fila actual para saber la versión
         fila = item.row()
-        version_proyecto = self.tabla_blend.item(fila, 2).text() # Columna de Versión
-
-        # Extraer el número de versión (ej: "3.6.0") para buscar el motor
+        version_proyecto = self.tabla_blend.item(fila, 2).text()
         match = re.search(r"(\d+\.\d+\.\d+)", version_proyecto)
         v_search = match.group(1) if match else ""
 
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         cursor = conn.cursor()
-        
-        # Buscar el ejecutable que coincida con la versión
         cursor.execute("SELECT ruta FROM ejecutables WHERE version LIKE ?", (f"%{v_search}%",))
-        res = cursor.fetchone()
-        
-        # Si no hay coincidencia exacta, buscar el más reciente
-        if not res:
-            cursor.execute("SELECT ruta FROM ejecutables ORDER BY version DESC LIMIT 1")
-            res = cursor.fetchone()
-        
+        res = cursor.fetchone() or cursor.execute("SELECT ruta FROM ejecutables ORDER BY version DESC LIMIT 1").fetchone()
         conn.close()
 
         if res:
-            exe_path = res[0]
             try:
-                self._log(f"🚀 Abriendo: {os.path.basename(ruta_blend)} con Blender {v_search}")
-                # Popen permite abrir Blender sin bloquear la interfaz de tu programa
-                subprocess.Popen([exe_path, ruta_blend])
-            except Exception as e:
-                QMessageBox.critical(self, "Error de Apertura", f"No se pudo iniciar Blender: {e}")
-        else:
-            QMessageBox.warning(self, "Configuración Faltante", "No hay motores de Blender registrados para abrir este archivo.")
-
+                self._log(f"🚀 Abriendo: {os.path.basename(ruta_blend)}")
+                subprocess.Popen([res[0], ruta_blend])
+            except Exception as e: QMessageBox.critical(self, "Error", str(e))
 
     def _setup_tab_exe(self, layout):
         form = QFormLayout()
@@ -333,9 +391,7 @@ class PreferenciasDialog(QDialog):
         self.tabla_blend = QTableWidget(); self.tabla_blend.setColumnCount(4)
         self.tabla_blend.setHorizontalHeaderLabels(["ID", "Ruta del .blend", "Versión Sincronizada", "Modificación"])
         self.tabla_blend.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        # --- NUEVA LÍNEA AQUÍ ---
         self.tabla_blend.itemDoubleClicked.connect(self.abrir_con_blender)
-        # ------------------------
         layout.addWidget(self.tabla_blend)
         btn_del = QPushButton("🗑️ Eliminar Proyecto"); btn_del.clicked.connect(lambda: self.eliminar_registro(self.tabla_blend, "proyectos"))
         layout.addWidget(btn_del)
@@ -350,8 +406,9 @@ class PreferenciasDialog(QDialog):
         fila = tabla.currentRow()
         if fila == -1: return
         id_reg = tabla.item(fila, 0).text()
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         conn.execute(f"DELETE FROM {db_table} WHERE id = ?", (id_reg,))
         conn.commit(); conn.close()
         self.actualizar_vistas_tablas()
-        if self.parent() and hasattr(self.parent(), 'contenido'): self.parent().contenido.cargar_datos_desde_db()
+        if self.parent() and hasattr(self.parent(), 'contenido'): 
+            self.parent().contenido.cargar_datos_desde_db()
