@@ -49,7 +49,7 @@ class JcRender(QMainWindow):
     def _crear_acciones(self):
         """Define las acciones que se compartirán entre menú y barra de herramientas"""
         # Acción Preferencias
-        self.acc_pref = QAction(QIcon.fromTheme("preferences-system"), "&Preferencias", self)
+        self.acc_pref = QAction("⚙️ Preferencias.", self)
         # Si tienes un icono específico: self.acc_pref = QAction(QIcon("tu_icono.png"), "Pref...", self)
         self.acc_pref.setShortcut("Ctrl+P")
         self.acc_pref.setStatusTip("Configurar rutas de Blender y Base de Datos")
@@ -75,6 +75,9 @@ class JcRender(QMainWindow):
         menu_ayuda.addAction("&Acerca de...")
 
     def _crear_barra_herramientas(self):
+
+        self.config_panel = PreferenciasDialog(self)
+
         """Configuración de la QToolBar"""
         self.toolbar = QToolBar("Barra de Herramientas Principal")
         self.toolbar.setIconSize(QSize(24, 24))
@@ -85,12 +88,24 @@ class JcRender(QMainWindow):
         self.toolbar.addAction(self.acc_pref)
         
         # Ejemplo: Añadir un separador y más botones
-        self.toolbar.addSeparator()
+        #self.toolbar.addSeparator()
         
         # Si quieres añadir un botón que llame a la sincronización de menu_principal
-        acc_sync = QAction("🔄 Sincronizar", self)
+        acc_sync = QAction("🔄 Sync. Cambios", self)
         acc_sync.triggered.connect(self.contenido.cargar_datos_desde_db)
         self.toolbar.addAction(acc_sync)
+
+        # Creamos el botón aquí para la toolbar
+        btn_sync = QPushButton("🔄 Sincronizar Proyectos")
+        btn_sync.setFixedHeight(35)
+        btn_sync.setStyleSheet("background-color: #d68910; color: white;")
+        
+        # CONEXIÓN CRUZADA: Conectamos el click a la función que vive en el otro script
+        btn_sync.clicked.connect(self.config_panel.sincronizar_todos_los_proyectos)
+        
+        # Añadir a la toolbar principal
+        self.toolbar.addWidget(btn_sync)
+        
 
     def _abrir_preferencias(self):
         try:

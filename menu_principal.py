@@ -44,6 +44,8 @@ class MenuPrincipal(QWidget):
         self.init_ui()
         self._verificar_y_crear_tablas()
         self.cargar_datos_desde_db()
+
+        self.tabla_renderizar.itemChanged.connect(self.on_render_item_changed)
         
         QTimer.singleShot(500, self.verificar_cambios_al_inicio)
 
@@ -257,137 +259,141 @@ class MenuPrincipal(QWidget):
         self.layout_raiz.addWidget(self.splitter_principal)
 
 
-    def extraer_version_desde_blend(self, ruta_archivo):
+    def extraer_version_desde_blend(self, ruta_blend):
         """
-        Extrae la versión del ADN del archivo .blend y la normaliza.
+        Extrae la versión real del ADN del archivo .blend.
+        Compatible con Blender 4.x y 5.x.
         """
         try:
-            if not os.path.exists(ruta_archivo):
+            if not os.path.exists(ruta_blend):
                 return "Desconocida"
-                
-            with open(ruta_archivo, 'rb') as f:
-                header = f.read(12).decode('utf-8', errors='ignore')
-                
-                if not header.startswith('BLENDER'):
-                    return "Desconocida"
 
-                v_str = header.split('v')[-1].strip()
+            with open(ruta_blend, 'rb') as f:
+                data_head = f.read(12) # BLENDER-vVv
+                print(data_head)
                 
-                if len(v_str) >= 3:
-                    major = v_str[0]
-                    minor = int(v_str[1:3]) 
+                if data_head.startswith(b'BLENDER'):
+                    # Los bytes 9, 10 y 11 son la versión
+                    # v9 = Major, v10 = Minor, v11 = Patch/Sub
+                    v9 = chr(data_head[9])  # '5'
+                    v10 = chr(data_head[10]) # '1'
+                    v11 = chr(data_head[11]) # '1'
+
+                    # Caso especial para tu versión estable 4.5.8
+                    if v9 == "4" and v10 == "5":
+                        return f"Blender 4.5.{v11} LTS"
                     
-                    # Normalizamos a formato X.Y (ej: 4.5 o 5.1)
-                    # Esto facilita la búsqueda LIKE en la base de datos
-                    return f"{major}.{minor}"
+                    # Para Blender 5.x y futuros
+                    return f"Blender {v9}.{v10}.{v11}"
                     
-                return "Desconocida"
         except Exception as e:
-            if hasattr(self, 'consola'):
-                self.consola.append(f"⚠️ Error ADN: {e}")
-            return "Error"
+            if hasattr(self, '_log'):
+                self._log(f"⚠️ Error ADN en {os.path.basename(ruta_blend)}: {e}")
         
+        return "Blender Desconocido"
 
-    def obtener_metadata_pro(self, exe, ruta):
+    def obtener_metadata_pro(self, exe_manual, ruta):
         """
-        Extrae metadatos técnicos ejecutando un script de introspección en Blender.
-        Prioriza la versión del ADN del archivo para garantizar la consistencia en la DB.
+        Extrae metadatos técnicos (versión, escena, motor) asegurando independencia total.
+        Optimizado para entornos Windows y Linux.
         """
+        # --- 1. RESET Y PREPARACIÓN ---
+        datos_finales = None
+        version_detectada_adn = self.extraer_version_desde_blend(ruta)
+        nombre_version_db = f"Blender {version_detectada_adn}" # Fallback por defecto
+        ejecutable_a_usar = exe_manual
+
+        # Determinar ruta del script extractor (independiente de si es .py o .exe)
         if getattr(sys, 'frozen', False):
             base_dir = os.path.dirname(sys.executable)
         else:
             base_dir = os.path.dirname(os.path.abspath(__file__))
 
         script_extractor = os.path.join(base_dir, "info_archivo_blend.py")
-        
-        if not os.path.exists(script_extractor):
-            self.consola.append(f"❌ Error: No se encuentra '{script_extractor}'")
-            return None
-
-        # --- 1. VALIDACIÓN DE ADN PRE-EJECUCIÓN ---
-        # Obtenemos la versión real (ej. 4.5) leyendo los bytes del archivo
-        version_real_adn = self.extraer_version_desde_blend(ruta)
 
         try:
-            ## --- GESTIÓN DEL EJECUTABLE ---
-            if not exe or not os.path.exists(exe):
-                conn = sqlite3.connect(self.db_path)
-                # version_real_adn ahora devolverá algo como "5.1" o "4.5"
-                version_filtro = f"%{version_real_adn}%"
-                
-                # Buscamos cualquier registro que contenga los números (ej: %5.1%)
+            # --- 2. BÚSQUEDA DE BINARIO EN BASE DE DATOS ---
+            conn = sqlite3.connect(self.db_path)
+            
+            # Si no hay ejecutable manual, buscamos el que coincida con el ADN del archivo
+            if not ejecutable_a_usar or not os.path.exists(ejecutable_a_usar):
+                filtro = f"%{version_detectada_adn}%"
                 res = conn.execute(
-                    "SELECT ruta FROM ejecutables WHERE version LIKE ? ORDER BY version DESC", 
-                    (version_filtro,)
+                    "SELECT ruta, version FROM ejecutables WHERE version LIKE ? ORDER BY version DESC", 
+                    (filtro,)
                 ).fetchone()
-                conn.close()
                 
                 if res:
-                    exe = res[0]
+                    ejecutable_a_usar = res[0]
+                    nombre_version_db = res[1]
                 else:
-                    # Fallback: Usar el ejecutable más reciente si no hay match
-                    conn = sqlite3.connect(self.db_path)
-                    res = conn.execute("SELECT ruta FROM ejecutables ORDER BY version DESC LIMIT 1").fetchone()
-                    conn.close()
-                    exe = res[0] if res else exe
+                    # Fallback: Usar el último Blender registrado si no hay coincidencia exacta
+                    last = conn.execute("SELECT ruta, version FROM ejecutables ORDER BY version DESC LIMIT 1").fetchone()
+                    if last:
+                        ejecutable_a_usar, nombre_version_db = last
+            else:
+                # Si el exe ya existe (manual), recuperamos su nombre real de la DB para la UI
+                res_name = conn.execute("SELECT version FROM ejecutables WHERE ruta = ?", (ejecutable_a_usar,)).fetchone()
+                if res_name:
+                    nombre_version_db = res_name[0]
+            
+            conn.close()
 
-            # Si después de la búsqueda seguimos sin exe, abortamos
-            if not exe or not os.path.exists(exe):
-                self.consola.append(f"⚠️ No hay ejecutable de Blender para extraer metadata de: {os.path.basename(ruta)}")
-                return None
+            # Validación de seguridad: si no hay ejecutable, no podemos continuar
+            if not ejecutable_a_usar or not os.path.exists(ejecutable_a_usar):
+                return {"version_blender": "Binario no configurado", "active_scene": "N/A"}
 
-            # --- 3. EJECUCIÓN DEL SUBPROCESO ---
+            # --- 3. EJECUCIÓN DEL SUBPROCESO (Blender en modo Background) ---
+            # En Windows 11 usamos CREATE_NO_WINDOW para evitar el molesto parpadeo del CMD
             resultado = subprocess.run(
-                [exe, "-b", ruta, "--python", script_extractor],
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
+                [ejecutable_a_usar, "-b", ruta, "--python", script_extractor],
+                capture_output=True, 
+                text=True, 
+                encoding='utf-8', 
                 errors='ignore',
-                timeout=25, # Tiempo suficiente para archivos pesados
-                # Solo usamos CREATE_NO_WINDOW en Windows para evitar errores en Linux
+                timeout=25,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
 
-            # --- 4. PARSEO SEGURO DE LA SALIDA ---
+            # --- 4. PARSEO DE DATOS JSON ---
             if resultado.stdout:
-                lineas = resultado.stdout.splitlines()
-                # Buscamos de atrás hacia adelante para encontrar la salida del script
-                for linea in reversed(lineas):
-                    linea_limpia = linea.strip()
-                    
-                    # Verificamos si la línea contiene nuestro marcador de seguridad
-                    if "JCRENDER_DATA:" in linea_limpia:
+                # Buscamos la línea que contiene nuestro tag de datos (leemos desde el final)
+                for linea in reversed(resultado.stdout.splitlines()):
+                    linea = linea.strip()
+                    if "JCRENDER_DATA:" in linea:
                         try:
-                            json_str = linea_limpia.split("JCRENDER_DATA:")[1]
-                            datos = json.loads(json_str)
+                            json_str = linea.split("JCRENDER_DATA:")[1]
+                            datos_finales = json.loads(json_str)
                             
-                            if "active_scene" in datos:
-                                # Sobrescribimos la versión con el ADN real del archivo
-                                # Esto corrige el error de "Versiones cambiadas"
-                                datos['version_blender'] = version_real_adn
-                                return datos
-                                
-                        except (json.JSONDecodeError, IndexError):
-                            continue
-                    
-                    # Fallback por si el script no usó el prefijo pero devolvió un JSON puro
-                    elif linea_limpia.startswith('{') and linea_limpia.endswith('}'):
-                        try:
-                            datos = json.loads(linea_limpia)
-                            datos['version_blender'] = version_real_adn
-                            return datos
-                        except:
-                            continue
+                            # Prioridad de etiquetado de versión:
+                            # 1. Versión específica devuelta por el script (ej. 4.5.8)
+                            # 2. Nombre guardado en la DB
+                            v_interna = datos_finales.get('version_blender')
+                            if v_interna and len(str(v_interna)) > 2:
+                                datos_finales['version_blender'] = f"Blender {v_interna}"
+                            else:
+                                datos_finales['version_blender'] = nombre_version_db
 
-            return None
+                            print(f"DEBUG: {os.path.basename(ruta)} detectado como {datos_finales['version_blender']}")
+                            return datos_finales
+                        except Exception as e:
+                            print(f"Error parseando JSON: {e}")
+                            continue
+            
+            # Si llegamos aquí, el subproceso falló o no devolvió el tag
+            return {
+                "version_blender": nombre_version_db, 
+                "active_scene": "Error lectura",
+                "engine": "Desconocido"
+            }
 
-        except subprocess.TimeoutExpired:
-            self.consola.append(f"⏳ Timeout: Blender tardó demasiado en leer {os.path.basename(ruta)}")
-            return None
         except Exception as e:
-            self.consola.append(f"⚠️ Error en extracción técnica ({os.path.basename(ruta)}): {e}")
-            return None
-
+            print(f"Error crítico de metadatos en {os.path.basename(ruta)}: {e}")
+            return {
+                "version_blender": "Error ADN", 
+                "active_scene": "N/A"
+            }
+    
     # --- FUNCIÓN: ELIMINAR PROYECTO ---
     def mostrar_menu_contextual(self, pos):
         menu = QMenu()
@@ -425,140 +431,170 @@ class MenuPrincipal(QWidget):
             if es_nombre: item.setText(f"⚠️ {item.text()}")
 
     def cargar_datos_desde_db(self):
-        if not os.path.exists(self.db_path): return
+        if not os.path.exists(self.db_path): 
+            return
 
-        # Limpiar tablas para evitar duplicados visuales
-        self.tabla_metadatos.setRowCount(0)
-        self.tabla_renderizar.setRowCount(0)
+        # 1. BLOQUEO DE SEÑALES
+        # Evita que on_render_item_changed se ejecute mientras cargamos datos
+        self.tabla_renderizar.blockSignals(True)
+        self.tabla_metadatos.blockSignals(True)
 
-        conn = sqlite3.connect(self.db_path)
-        # Query optimizado: 16 columnas en total (f[0] al f[15])
-        query = """SELECT 
-                    p.carpeta,          -- f[0]
-                    p.blender_version,  -- f[1]
-                    m.escena,           -- f[2]
-                    m.viewlayer,        -- f[3]
-                    m.camara,           -- f[4]
-                    m.f_inicio,         -- f[5]
-                    m.f_final,          -- f[6]
-                    m.fps,              -- f[7]
-                    m.res_x,            -- f[8]
-                    m.res_y,            -- f[9]
-                    p.id,               -- f[10]
-                    p.fecha_mod,        -- f[11]
-                    r.motor,            -- f[12]
-                    r.dispositivo,      -- f[13]
-                    r.formato,          -- f[14]
-                    r.nombre_out        -- f[15]
-                FROM proyectos p
-                LEFT JOIN metadatos m ON p.id = m.id_proyecto 
-                LEFT JOIN renderizado r ON p.id = r.id_proyecto"""
-    
-        filas = conn.execute(query).fetchall()
-        conn.close()
+        try:
+            # Limpieza total antes de cargar
+            self.tabla_metadatos.setRowCount(0)
+            self.tabla_renderizar.setRowCount(0)
 
-        for f in filas:
-            ruta_archivo = f[0]
-            id_proyecto = f[10] # Antes f[14], ahora f[10]
-            fecha_db = str(f[11])[:16] if f[11] else "" # p.fecha_mod
-    
-            existe = os.path.exists(ruta_archivo) if ruta_archivo else False
-            n_sync = False
+            conn = sqlite3.connect(self.db_path)
+            # Seleccionamos explícitamente las columnas para mantener el orden de f[index]
+            query = """SELECT 
+                        p.carpeta, p.blender_version, m.escena, m.viewlayer, m.camara, 
+                        m.f_inicio, m.f_final, m.fps, m.res_x, m.res_y, 
+                        p.id, p.fecha_mod, r.motor, r.dispositivo, r.formato, r.nombre_out 
+                    FROM proyectos p
+                    LEFT JOIN metadatos m ON p.id = m.id_proyecto 
+                    LEFT JOIN renderizado r ON p.id = r.id_proyecto
+                    ORDER BY p.id ASC"""
+            
+            filas = conn.execute(query).fetchall()
+            conn.close()
 
-            if existe:
-                mt = os.path.getmtime(ruta_archivo)
-                fd = datetime.datetime.fromtimestamp(mt).strftime('%d/%m/%Y %H:%M')
-                if not fecha_db or fd != fecha_db: 
-                    n_sync = True
+            for f in filas:
+                # Verificación de sincronización (DNA monitor)
+                ruta = f[0]
+                existe = os.path.exists(ruta) if ruta else False
+                n_sync = False
+                
+                if existe:
+                    mt = os.path.getmtime(ruta)
+                    fd = datetime.datetime.fromtimestamp(mt).strftime('%d/%m/%Y %H:%M')
+                    fecha_db = str(f[11])[:16] if f[11] else ""
+                    # Si la fecha de modificación del archivo es distinta a la DB, marcar alerta
+                    if not fecha_db or fd != fecha_db: 
+                        n_sync = True
 
-            self._insertar_filas(f, n_sync, existe)
+                # Inserta la fila en ambas tablas visuales
+                self._insertar_filas(f, n_sync, existe)
+
+        except Exception as e:
+            if hasattr(self, 'consola'):
+                self.consola.append(f"❌ Error al cargar base de datos: {e}")
+            print(f"Error crítico en carga: {e}")
+
+        finally:
+            # 2. DESBLOQUEO DE SEÑALES
+            # Ahora que la tabla está lista, permitimos que los cambios del usuario se guarden
+            self.tabla_renderizar.blockSignals(False)
+            self.tabla_metadatos.blockSignals(False)
 
 
     def _insertar_filas(self, f, n_sync, existe):
+        # 1. Crear la fila en ambas tablas al mismo tiempo
         row = self.tabla_metadatos.rowCount()
         self.tabla_metadatos.insertRow(row)
         self.tabla_renderizar.insertRow(row)
 
-        ruta_completa = f[0] if f[0] else ""
-        nombre_blend = os.path.basename(ruta_completa) if ruta_completa else "Sin nombre"
-        version_blend = f[1] if f[1] else "---"
+        # 2. Variables de datos seguras basándonos en tu Query SQL de cargar_datos_desde_db
+        # f[0]=carpeta(ruta), f[1]=version, f[2]=escena, f[10]=id_proyecto
+        ruta_full = str(f[0]) if f[0] else ""
+        nombre_b = os.path.basename(ruta_full) if ruta_full else "Sin nombre"
+        version_b = str(f[1]) if f[1] else "---"
+        id_proy = f[10]
 
-        # --- TABLA METADATOS (10 columnas) ---
-        datos_m = [
-            nombre_blend,                      # Col 0: Nombre
-            version_blend,                     # Col 1: Versión
-            f[2] or "---",                     # Col 2: Escena
-            f[3] or "---",                     # Col 3: ViewLayer
-            f[4] or "---",                     # Col 4: Cámara
-            f[5] if f[5] is not None else 1,   # Col 5: Inicio
-            f[6] if f[6] is not None else 250, # Col 6: Fin
-            f[7] or 0,                         # Col 7: FPS
-            f[8] or 0,                         # Col 8: Res X
-            f[9] or 0,                         # Col 9: Res Y
-            f[0]                               # Col 10: Ruta
+        # --- LLENAR TABLA METADATOS ---
+        datos_metadatos = [
+            nombre_b,           # 0
+            version_b,          # 1
+            f[2] or "---",      # 2: Escena
+            f[3] or "---",      # 3: ViewLayer
+            f[4] or "---",      # 4: Cámara
+            f[5] or 1,          # 5: Inicio
+            f[6] or 1,          # 6: Fin
+            f[7] or 0,          # 7: FPS
+            f[8] or 0,          # 8: Res X
+            f[9] or 0,          # 9: Res Y
+            ruta_full           # 10: RUTA ABSOLUTA (Vital para Batch)
         ]
 
-        for i, v in enumerate(datos_m):
-            item = QTableWidgetItem(str(v))
+        for col_m, valor in enumerate(datos_metadatos):
+            item = QTableWidgetItem(str(valor))
             item.setTextAlignment(Qt.AlignCenter)
-            self._aplicar_estilo_alerta(item, n_sync, existe, es_nombre=(i==0))
-            self.tabla_metadatos.setItem(row, i, item)
+            # Aplicar alertas visuales si el archivo se movió o cambió
+            self._aplicar_estilo_alerta(item, n_sync, existe, es_nombre=(col_m==0))
+            self.tabla_metadatos.setItem(row, col_m, item)
 
-        # --- TABLA RENDERIZAR (Acciones y Configuración) ---
-        # Col 0: Checkbox
+        # --- LLENAR TABLA RENDERIZAR ---
+        # Col 0: Checkbox de selección
         chk = QCheckBox()
         chk.setChecked(existe)
         self.tabla_renderizar.setCellWidget(row, 0, chk)
 
-        # Datos estáticos en tabla render
-        out_name = f[15] if f[15] else (os.path.splitext(nombre_blend)[0] if ruta_completa else "output")
-
-        cols_r = {
-            1: nombre_blend, 
-            2: version_blend, 
-            5: "render", # ruta_output (puedes cambiarlo por f[índice] si lo añades al SELECT)
-            6: out_name, 
-            8: str(f[5] or 1), # f_start
-            9: str(f[6] or 1)  # f_end
+        # Columnas de texto
+        nombre_out_val = f[15] if f[15] else os.path.splitext(nombre_b)[0]
+        
+        mapping_render = {
+            1: nombre_b, 
+            2: version_b, 
+            5: "render", 
+            6: nombre_out_val, 
+            8: str(f[5] or 1), 
+            9: str(f[6] or 1)
         }
 
-        for c, t in cols_r.items():
-            item = QTableWidgetItem(str(t))
-            item.setTextAlignment(Qt.AlignCenter)
-            self._aplicar_estilo_alerta(item, n_sync, existe, es_nombre=(c==1))
-            self.tabla_renderizar.setItem(row, c, item)
+        for col_r, txt in mapping_render.items():
+            it_r = QTableWidgetItem(str(txt))
+            it_r.setTextAlignment(Qt.AlignCenter)
+            self.tabla_renderizar.setItem(row, col_r, it_r)
 
-        # ComboBoxes con índices actualizados
-        combos = [
-            (3, ["EEVEE", "CYCLES"], f[12]),      # Col 3: Motor (f[12])
-            (4, ["CPU", "CUDA", "OPTIX", "HIP"], f[13]), # Col 4: Dispositivo (f[13])
-            (7, ["PNG", "JPEG", "EXR", "AVI_JPEG"], f[14]) # Col 7: Formato (f[14])
-        ]
+        # Widgets de ComboBox (Motor, Disp, Formato)
+        self._crear_combos_en_fila(row, f[12], f[13], f[14])
 
-        for col, opts, cur in combos:
-            cb = QComboBox()
-            cb.addItems(opts)
-            val_defecto = "CUDA" if col == 4 else (opts[0] if opts else "")
-            cb.setCurrentText(str(cur) if cur and str(cur) != "None" else val_defecto)
-            self.tabla_renderizar.setCellWidget(row, col, cb)
-
-        # Control de Progreso y Botón (usando f[10] que es el ID)
+        # BARRA DE PROGRESO (Columna 10)
         bar = QProgressBar()
         bar.setRange(0, 100)
         bar.setValue(0)
-        bar.setStyleSheet("QProgressBar { text-align: center; border-radius: 5px; background: #333; } "
-                        "QProgressBar::chunk { background-color: #2980b9; }")
+        bar.setTextVisible(True)
+        bar.setAlignment(Qt.AlignCenter)
+        bar.setFormat("ESPERANDO...")
+        # Estilo para visibilidad en Linux Mint Dark
+        bar.setStyleSheet("""
+            QProgressBar { border: 1px solid #444; border-radius: 4px; text-align: center; color: white; }
+            QProgressBar::chunk { background-color: #27ae60; }
+        """)
         self.tabla_renderizar.setCellWidget(row, 10, bar)
 
-        # --- Dentro de _insertar_filas ---
-        id_proy = f[10] # El ID según tu estructura de SELECT
+        # BOTÓN ABORTAR (Columna 11)
         btn_abort = QPushButton("🛑 Abort")
-        btn_abort.setEnabled(False) # Inicia deshabilitado
-
-        # Usamos un lambda para pasar el ID específico de esa fila
-        btn_abort.clicked.connect(lambda _, id_p=id_proy: self.abortar_render_especifico(id_p))
-
+        btn_abort.setEnabled(False)
+        # Usamos el ID de la base de datos (f[10]) para identificar el proceso
+        btn_abort.clicked.connect(lambda _, r=row: self.abortar_render_especifico(r))
         self.tabla_renderizar.setCellWidget(row, 11, btn_abort)
+        
+
+    def _crear_combos_en_fila(self, row, motor, disp, fmt):
+        # Definimos los combos con su columna, opciones, valor actual y nombre del campo en la DB
+        combos_def = [
+            (3, ["EEVEE", "CYCLES"], motor, "motor"),
+            (4, ["CPU", "CUDA", "OPTIX", "HIP"], disp, "dispositivo"),
+            (7, ["PNG", "JPEG", "EXR", "AVI_JPEG"], fmt, "formato") # <--- Campo Formato
+        ]
+        
+        for c, opts, curr, campo in combos_def:
+            cb = QComboBox()
+            cb.addItems(opts)
+            
+            # Establecer valor actual
+            if curr and str(curr) != "None":
+                cb.setCurrentText(str(curr))
+            else:
+                # Valores por defecto inteligentes
+                default = "CUDA" if c == 4 else opts[0]
+                cb.setCurrentText(default)
+            
+            # CONEXIÓN CRUCIAL: Al cambiar el combo, se guarda en la DB inmediatamente
+            # Usamos r=row y fld=campo para capturar los valores correctos en el closure
+            cb.currentTextChanged.connect(lambda texto, r=row, fld=campo: self.actualizar_dato_render_db(r, fld, texto))
+            
+            self.tabla_renderizar.setCellWidget(row, c, cb)
 
 
     def detectar_mejor_dispositivo(self, exe):
@@ -587,78 +623,225 @@ class MenuPrincipal(QWidget):
             self.consola.append(f"⚠️ Error en auto-detección: {e}")
             
         return "CPU"
+    
 
-    # --- RENDERIZADO BATCH Y CONSOLA ---
+    # --- AÑADE ESTOS MÉTODOS DENTRO DE LA CLASE MenuPrincipal ---
+
+    def on_render_item_changed(self, item):
+        """Detecta cambios manuales del usuario en la tabla de renderizado"""
+        # 1. Bloqueo de seguridad interno para evitar rebotes
+        # (Opcional, si notas que se dispara dos veces)
+        
+        row = item.row()
+        col = item.column()
+        nuevo_texto = item.text().strip() # Eliminamos espacios accidentales
+
+        # 2. Mapeo Extendido (Ajustado a No aparecen.png)
+        # Col 5: Carpeta Out -> campo 'ruta_output'
+        # Col 6: Nombre Out  -> campo 'nombre_out'
+        # Col 8: Desde       -> campo 'f_inicio'
+        # Col 9: Hasta       -> campo 'f_final'
+        mapeo = {
+            5: "ruta_output", 
+            6: "nombre_out", 
+            8: "f_inicio",   
+            9: "f_final"
+        }
+
+        if col in mapeo:
+            campo_db = mapeo[col]
+            
+            # 3. Validación de integridad para Frames (Columnas 8 y 9)
+            if col in [8, 9]:
+                if not nuevo_texto.isdigit():
+                    # Si el usuario borra el frame o pone letras, no guardamos
+                    return 
+
+            # 4. Ejecutar la actualización en la base de datos
+            self.actualizar_dato_render_db(row, campo_db, nuevo_texto)
+
+
+    def actualizar_dato_render_db(self, row, campo, valor):
+        try:
+            # Extraer ID de la columna 10 de metadatos
+            item_id = self.tabla_metadatos.item(row, 10)
+            if not item_id: return
+            id_proyecto = item_id.text()
+
+            # Decidir tabla según el campo
+            # f_inicio y f_final están en metadatos, el resto en renderizado
+            tabla_db = "metadatos" if campo in ["f_inicio", "f_final"] else "renderizado"
+
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Actualización inmediata
+            query = f"UPDATE {tabla_db} SET {campo} = ? WHERE id_proyecto = ?"
+            cursor.execute(query, (valor, id_proyecto))
+            
+            conn.commit()
+            conn.close()
+            # Consola de depuración opcional
+            # print(f"DB Guardada: {campo} -> {valor}")
+            
+        except Exception as e:
+            print(f"Error al guardar en tiempo real: {e}")
+
+
     def leer_consola_blender(self):
-        # ... (Tu lógica existente para la consola y la barra de progreso)
         data = self.proceso_render.readAllStandardOutput().data().decode('utf-8', errors='ignore')
         self.consola.insertPlainText(data)
         self.consola.ensureCursorVisible()
 
-        # ... (Lógica Fra:X / Sample:X existente...)
+        if self.proceso_actual_row == -1:
+            return
 
-        # --- NUEVA LÓGICA DE DETECCIÓN DE IMAGEN ---
-        # Blender imprime: Saved: 'E:\ruta\archivo_001.png'
-        if "Saved: '" in data and self.proceso_actual_row != -1:
+        bar = self.tabla_renderizar.cellWidget(self.proceso_actual_row, 10)
+        if not bar:
+            return
+
+        # --- 1. PROCESAMIENTO DE ANIMACIÓN (Prioridad Alta) ---
+        if "Fra:" in data:
             try:
-                # Extraer la ruta que está entre comillas simples
-                ruta_completa_cruda = data.split("Saved: '")[1].split("'")[0]
-                # Normalizar ruta (por si acaso Blender usa / y Windows \)
-                ruta_completa = os.path.normpath(ruta_completa_cruda)
-                
-                # Verificar si el archivo realmente existe (a veces tarda unos ms)
-                if os.path.exists(ruta_completa):
-                    self.actualizar_panel_preview(ruta_completa)
+                # Extraer frame actual con regex para evitar errores de split
+                import re
+                match = re.search(r"Fra:(\d+)", data)
+                if match:
+                    frame_actual = int(match.group(1))
+                    
+                    item_ini = self.tabla_renderizar.item(self.proceso_actual_row, 8)
+                    item_fin = self.tabla_renderizar.item(self.proceso_actual_row, 9)
+                    
+                    f_ini = int(item_ini.text()) if item_ini and item_ini.text().isdigit() else 1
+                    f_fin = int(item_fin.text()) if item_fin and item_fin.text().isdigit() else 1
+                    
+                    total_frames = (f_fin - f_ini) + 1
+                    if total_frames <= 0: total_frames = 1
+                    
+                    progreso_global = int(((frame_actual - f_ini + 1) / total_frames) * 100)
+                    progreso_global = min(max(progreso_global, 0), 100)
+                    
+                    # Actualizamos el valor de la barra con el progreso REAL del proyecto
+                    bar.setValue(progreso_global)
+                    # Forzamos que el texto sea visible y centrado
+                    bar.setAlignment(Qt.AlignCenter) 
+                    
             except Exception as e:
-                pass # Fallo silencioso si el parseo de consola cambia en Blender 5.x
+                print(f"Error en frames: {e}")
 
-        # Limitar la cantidad de texto en consola para evitar saturar la memoria
-        if self.consola.blockCount() > 500:
-            cursor = self.consola.textCursor()
-            cursor.movePosition(cursor.Start)
-            cursor.select(cursor.BlockUnderCursor)
-            cursor.removeSelectedText()
-            cursor.deleteChar() # Borra el salto de línea sobrante
+        # --- 2. PROCESAMIENTO DE MUESTRAS (Información Detallada) ---
+        # Usamos IF (no elif) para que el texto se actualice sin interrumpir el valor de la barra
+        if "Sample" in data:
+            try:
+                linea_sample = data.split("Sample")[1].strip()
+                if "/" in linea_sample:
+                    partes = linea_sample.split("/")
+                    s_act = int(''.join(filter(str.isdigit, partes[0])))
+                    s_tot = int(''.join(filter(str.isdigit, partes[1].split()[0])))
+                    
+                    # Solo cambiamos el FORMATO del texto, no el VALUE de la barra
+                    # Así el color de la barra representa el avance total, 
+                    # pero el texto te dice qué tan avanzado va el frame actual.
+                    porcentaje_sample = int((s_act / s_tot) * 100)
+                    bar.setFormat(f"Proy: %p% | Frame: {porcentaje_sample}%")
+                    
+            except:
+                pass
 
+    def procesar_salida_consola(self, linea, fila_tabla, f_inicio, f_final):
+        # Buscamos el patrón "Fra:X" en la salida de Blender
+        match = re.search(r"Fra:(\d+)", linea)
+        
+        if match:
+            frame_actual = int(match.group(1))
+            total_frames = (f_final - f_inicio) + 1
+            
+            # Calcular porcentaje
+            if total_frames > 0:
+                progreso_num = int(((frame_actual - f_inicio + 1) / total_frames) * 100)
+                # Asegurar que no exceda 100%
+                progreso_num = min(100, max(0, progreso_num))
+                
+                # Actualizar la UI
+                self.actualizar_barra_progreso_ui(fila_tabla, progreso_num)
 
+    def actualizar_barra_progreso_ui(self, fila, valor):
+        # Acceder al widget de la columna 10 (PROGRESO)
+        widget = self.tabla_renderizar.cellWidget(fila, 10)
+        if isinstance(widget, QProgressBar):
+            widget.setValue(valor)
+            widget.setFormat(f"RENDERING... {valor}%")
+
+    
     def leer_errores_blender(self):
         self.consola.insertPlainText(f"⚠️ {self.proceso_render.readAllStandardError().data().decode('utf-8', errors='ignore')}")
 
     def preparar_cola_batch(self):
         self.cola_render = []
-        # Deshabilitar el botón principal para evitar clics dobles
         self.btn_batch.setEnabled(False)
-        
+
+        # --- FUNCIONES AUXILIARES (Definidas fuera del loop para mayor velocidad) ---
+        def get_text_safe(tabla, row, col, default=""):
+            item = tabla.item(row, col)
+            return item.text().strip() if item else default
+
+        def safe_int(tabla, row, col, default=1):
+            val = get_text_safe(tabla, row, col)
+            return int(val) if val.isdigit() else default
+
         for r in range(self.tabla_renderizar.rowCount()):
+            # Columna 0 tiene el Checkbox de selección
             chk = self.tabla_renderizar.cellWidget(r, 0)
+            
             if chk and chk.isChecked():
-                # Función segura para capturar frames de la tabla renderizar
-                def safe_int(col, default=1):
-                    item = self.tabla_renderizar.item(r, col)
-                    val = item.text() if item else ""
-                    return val if val.isdigit() else str(default)
+                # --- CAPTURA DE WIDGETS (ComboBoxes) ---
+                cb_motor = self.tabla_renderizar.cellWidget(r, 3)
+                cb_disp  = self.tabla_renderizar.cellWidget(r, 4)
+                cb_form  = self.tabla_renderizar.cellWidget(r, 7)
 
-                # IMPORTANTE: La ruta real del archivo está en f[0], 
-                # que corresponde a la columna de 'Ruta' oculta o visible en la UI.
-                # Según tu carga de datos, f[0] es la ruta completa.
-                self.cola_render.append({
-                    "fila": r, 
-                    "ruta": self.tabla_metadatos.item(r, 10).text() if self.tabla_metadatos.item(r, 10) else "", # Ajustar al índice real de 'Ruta'
-                    "v": self.tabla_renderizar.item(r, 2).text(),
-                    "m": self.tabla_renderizar.cellWidget(r, 3).currentText(), 
-                    "d": self.tabla_renderizar.cellWidget(r, 4).currentText(),
-                    "out": self.tabla_renderizar.item(r, 5).text(), 
-                    "nom": self.tabla_renderizar.item(r, 6).text(),
-                    "f": self.tabla_renderizar.cellWidget(r, 7).currentText(), 
-                    "s": safe_int(8, 1),
-                    "e": safe_int(9, 1)
-                })
+                try:
+                    # OBTENCIÓN DE LA RUTA REAL: 
+                    # Según tu _insertar_filas anterior, la ruta absoluta está en la Col 10
+                    # de la tabla_metadatos.
+                    ruta_completa = get_text_safe(self.tabla_metadatos, r, 10)
 
+                    # VALIDACIÓN CRÍTICA: Si la ruta no existe, avisar antes de empezar
+                    if not os.path.exists(ruta_completa):
+                        self.consola.append(f"❌ Error fila {r+1}: El archivo .blend no existe en la ruta.")
+                        continue
+
+                    self.cola_render.append({
+                        "fila": r, 
+                        "ruta": ruta_completa,
+                        "v":    get_text_safe(self.tabla_renderizar, r, 2, "4.5.8 LTS"),
+                        "m":    cb_motor.currentText() if cb_motor else "CYCLES", 
+                        "d":    cb_disp.currentText() if cb_disp else "CUDA",
+                        "out":  get_text_safe(self.tabla_renderizar, r, 5, "render"), 
+                        "nom":  get_text_safe(self.tabla_renderizar, r, 6, "output"),
+                        "f":    cb_form.currentText() if cb_form else "PNG", 
+                        "s":    safe_int(self.tabla_renderizar, r, 8, 1), # Frame Inicio
+                        "e":    safe_int(self.tabla_renderizar, r, 9, 1)  # Frame Final
+                    })
+                except Exception as e:
+                    if hasattr(self, 'consola'):
+                        self.consola.append(f"❌ Error al capturar fila {r+1}: {e}")
+                    continue
+
+        # --- INICIO DE PROCESO ---
         if self.cola_render:
+            self.consola.append(f"🚀 Iniciando cola de render: {len(self.cola_render)} proyectos.")
+            
+            # Resetear el progreso visual
+            for item in self.cola_render:
+                pbar = self.tabla_renderizar.cellWidget(item['fila'], 10)
+                if pbar: 
+                    pbar.setValue(0)
+                    pbar.setFormat("EN COLA...")
+                    
             self.procesar_siguiente_en_cola()
         else:
             self.btn_batch.setEnabled(True)
-            self.consola.append("⚠️ No hay proyectos seleccionados para renderizar.")
+            self.consola.append("⚠️ No hay proyectos válidos o seleccionados para renderizar.")
 
 
     def procesar_siguiente_en_cola(self):
@@ -692,6 +875,7 @@ class MenuPrincipal(QWidget):
         os.makedirs(ruta_final_folder, exist_ok=True)
 
         nombre_file = t["nom"].strip() if t["nom"].strip() else os.path.splitext(os.path.basename(t["ruta"]))[0]
+        nombre_file_2 = 'img'
         path_salida_completo = os.path.join(ruta_final_folder, f"{nombre_file}_###")
 
         # 3. SCRIPT PYTHON (Corregido con comillas triples para evitar SyntaxError)
@@ -786,89 +970,46 @@ class MenuPrincipal(QWidget):
 
 
     def sincronizar_todo_desde_principal(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        # 1. Obtener los proyectos registrados
-        proyectos = cursor.execute("SELECT id, carpeta, blender_version FROM proyectos").fetchall()
-
-        for id_proy, ruta, version_db in proyectos:
-            if not os.path.exists(ruta): 
-                continue
-
-            # 2. Localizar el ejecutable de Blender para la extracción
-            exe_row = cursor.execute("SELECT ruta FROM ejecutables LIMIT 1").fetchone()
-            if not exe_row: 
-                continue
-    
-            # 3. EXTRACCIÓN de datos desde el archivo .blend
-            # Se asume que obtener_metadata_pro devuelve un diccionario con las claves correctas
-            nuevos_datos = self.obtener_metadata_pro(exe_row[0], ruta)
-    
-            if nuevos_datos:
-                print(f"DEBUG: Sincronizando ID {id_proy} - Escena: {nuevos_datos.get('active_scene')}")
+        self.tabla_renderizar.blockSignals(True) # Evitar bucles
         
-                try:
-                    # Actualizar Versión en la tabla Proyectos
-                    cursor.execute("UPDATE proyectos SET blender_version=? WHERE id=?", 
-                                (nuevos_datos.get('version_blender'), id_proy))
-            
-                    # 4. UPSERT Metadatos: Ahora con viewlayer, f_inicio y f_final
-                    cursor.execute("""
-                        INSERT INTO metadatos (id_proyecto, escena, viewlayer, camara, f_inicio, f_final, fps, res_x, res_y)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(id_proyecto) DO UPDATE SET
-                            escena=excluded.escena, 
-                            viewlayer=excluded.viewlayer, 
-                            camara=excluded.camara,
-                            f_inicio=excluded.f_inicio, 
-                            f_final=excluded.f_final, 
-                            fps=excluded.fps, 
-                            res_x=excluded.res_x, 
-                            res_y=excluded.res_y
-                    """, (
-                        id_proy, 
-                        nuevos_datos.get('active_scene', 'Scene'), 
-                        nuevos_datos.get('view_layer', 'N/A'),  # Nuevo campo
-                        nuevos_datos.get('active_camera', 'Camera'),
-                        nuevos_datos.get('frame_start', 1),    # f_inicio
-                        nuevos_datos.get('frame_end', 250),    # f_final
-                        nuevos_datos.get('frame_rate', 24),
-                        nuevos_datos.get('resolution_x', 1920), 
-                        nuevos_datos.get('resolution_y', 1080)
-                    ))
-            
-                    # 5. UPSERT Renderizado (Mantenemos f_start y f_end para la cola de renderizado)
-                    cursor.execute("""
-                        INSERT INTO renderizado (id_proyecto, motor, dispositivo, formato, f_start, f_end, ruta_output, nombre_out)
-                        VALUES (?, 'CYCLES', 'CUDA', 'PNG', ?, ?, 'render', ?)
-                        ON CONFLICT(id_proyecto) DO UPDATE SET
-                            f_start=excluded.f_start, 
-                            f_end=excluded.f_end
-                    """, (
-                        id_proy, 
-                        nuevos_datos.get('frame_start', 1), 
-                        nuevos_datos.get('frame_end', 250), 
-                        os.path.splitext(os.path.basename(ruta))[0]
-                    ))
-            
-                except Exception as e:
-                    print(f"Error sincronizando ID {id_proy}: {e}")
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            proyectos = cursor.execute("SELECT id, carpeta FROM proyectos").fetchall()
 
-        conn.commit()
-        conn.close()
-
-        # --- PASO CRÍTICO: RECALIBRACIÓN DE VERSIONES ---
-        # Invocamos la función de corrección aquí para arreglar el problema de 
-        # 'Versiones cambiadas.png' antes de refrescar la interfaz.
-        self.corregir_asignacion_versiones()
-
-        # 6. Refrescar la interfaz visual con los datos ya ordenados
-        self.cargar_datos_desde_db()
-        self.consola.append("✅ Sincronización completa: Datos técnicos y versiones corregidas.")
+            for id_proy, ruta in proyectos:
+                if not os.path.exists(ruta): continue
+                
+                exe_row = cursor.execute("SELECT ruta FROM ejecutables LIMIT 1").fetchone()
+                if not exe_row: continue
         
-        # 6. Refrescar la interfaz visual
-        self.cargar_datos_desde_db()
+                nuevos_datos = self.obtener_metadata_pro(exe_row[0], ruta)
+        
+                if nuevos_datos:
+                    # A. ACTUALIZACIÓN TÉCNICA (Lo que SIEMPRE debe sincronizarse)
+                    cursor.execute("""
+                        UPDATE metadatos SET 
+                            escena=?, viewlayer=?, camara=?, fps=?, res_x=?, res_y=?
+                        WHERE id_proyecto=?
+                    """, (nuevos_datos.get('active_scene'), nuevos_datos.get('view_layer'),
+                        nuevos_datos.get('active_camera'), nuevos_datos.get('frame_rate'),
+                        nuevos_datos.get('resolution_x'), nuevos_datos.get('resolution_y'), id_proy))
+
+                    # B. PROTECCIÓN DE TUS CAMBIOS (Lo que NO debe sobrescribirse)
+                    # Al usar DO NOTHING, si el proyecto ya existe, no toca tus Frames ni tu Motor
+                    cursor.execute("""
+                        INSERT INTO renderizado (id_proyecto, motor, dispositivo, formato, nombre_out, ruta_output)
+                        VALUES (?, 'CYCLES', 'OPTIX', 'PNG', ?, 'render')
+                        ON CONFLICT(id_proyecto) DO NOTHING
+                    """, (id_proy, os.path.splitext(os.path.basename(ruta))[0]))
+
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Error en sincronización: {e}")
+        finally:
+            self.cargar_datos_desde_db()
+            self.tabla_renderizar.blockSignals(False)
 
 
     def verificar_cambios_al_inicio(self):
@@ -973,67 +1114,7 @@ class MenuPrincipal(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Error de DB", f"No se pudo eliminar: {e}")
 
-    def leer_consola_blender(self):
-        data = self.proceso_render.readAllStandardOutput().data().decode('utf-8', errors='ignore')
-        self.consola.insertPlainText(data)
-        self.consola.ensureCursorVisible()
-
-        if self.proceso_actual_row == -1:
-            return
-
-        bar = self.tabla_renderizar.cellWidget(self.proceso_actual_row, 10)
-        if not bar:
-            return
-
-        # --- PROCESAMIENTO DE ANIMACIÓN (Fra:XX) ---
-        if "Fra:" in data:
-            try:
-                # Extraer solo los números de la parte del frame
-                parte = data.split("Fra:")[1].split("|")[0].split(" ")[0].strip()
-                num_extraido = ''.join(filter(str.isdigit, parte))
-                
-                if num_extraido: # Solo si hay algo que convertir
-                    frame_actual = int(num_extraido)
-                    
-                    # Obtener rangos con validación de seguridad
-                    item_ini = self.tabla_renderizar.item(self.proceso_actual_row, 8)
-                    item_fin = self.tabla_renderizar.item(self.proceso_actual_row, 9)
-                    
-                    f_ini = int(item_ini.text()) if item_ini and item_ini.text().isdigit() else 1
-                    f_fin = int(item_fin.text()) if item_fin and item_fin.text().isdigit() else 1
-                    
-                    total_frames = (f_fin - f_ini) + 1
-                    if total_frames <= 0: total_frames = 1
-                    
-                    progreso_raw = ((frame_actual - f_ini + 1) / total_frames) * 100
-                    progreso = int(min(max(progreso_raw, 0), 100))
-                    
-                    bar.setFormat("%p%") 
-                    bar.setValue(progreso)
-                    bar.setStyleSheet("QProgressBar::chunk { background-color: #f39c12; }")
-            except Exception as e:
-                print(f"Error en frames: {e}")
-
-        # --- PROCESAMIENTO DE MUESTRAS (Sample X/X) ---
-        elif "Sample" in data:
-            try:
-                # Limpiamos la línea para evitar el error de base 10
-                linea_sample = data.split("Sample")[1].strip()
-                if "/" in linea_sample:
-                    parte_actual = linea_sample.split("/")[0].strip()
-                    parte_total = linea_sample.split("/")[1].split(" ")[0].strip()
-                    
-                    # Solo convertimos si ambos son dígitos
-                    if parte_actual.isdigit() and parte_total.isdigit():
-                        s_act = int(parte_actual)
-                        s_tot = int(parte_total)
-                        
-                        progreso_s = int((s_act / s_tot) * 100)
-                        bar.setFormat(f"Muestras: {progreso_s}%")
-                        bar.setValue(progreso_s)
-            except Exception as e:
-                # Silenciamos errores menores de parsing de samples
-                pass
+    
     
     def abortar_render_especifico(self, id_proyecto):
         """
@@ -1129,3 +1210,30 @@ class MenuPrincipal(QWidget):
         if hasattr(self, 'pixmap_actual') and not self.pixmap_actual.isNull():
             self.lbl_preview.setPixmap(self.pixmap_actual.scaled(
                 self.lbl_preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            
+
+    def actualizar_ui_con_metadata(self, ruta_archivo, datos):
+        """
+        Busca la fila exacta que corresponde a la ruta y actualiza SOLO esa fila.
+        """
+        if not datos:
+            return
+
+        # Buscamos en qué fila está este archivo realmente
+        fila_destino = -1
+        for row in range(self.tabla_pro.rowCount()):
+            # Suponiendo que la ruta completa está guardada en una columna (puedes tenerla oculta)
+            # o que el nombre del archivo coincide.
+            item_archivo = self.tabla_pro.item(row, 0) # Columna Nombre
+            if item_archivo and os.path.basename(ruta_archivo) == item_archivo.text():
+                fila_destino = row
+                break
+        
+        if fila_destino != -1:
+            # Ahora insertamos los datos asegurándonos de que es la fila correcta
+            self.tabla_pro.setItem(fila_destino, 1, QTableWidgetItem(datos['version_blender']))
+            self.tabla_pro.setItem(fila_destino, 2, QTableWidgetItem(datos.get('active_scene', 'N/A')))
+            # ... resto de columnas
+        else:
+            # Si no existe, podrías crear la fila, pero esto evita que se crucen datos
+            print(f"Error: No se encontró la fila para {ruta_archivo}")
