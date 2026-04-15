@@ -1,6 +1,10 @@
 import sys
 from cx_Freeze import setup, Executable
 
+from jc_render import JcRender
+
+version_exe = JcRender.version_compilado()
+
 # Definición de la base para evitar el error de Python 3.13
 base = None
 if sys.platform == "win32":
@@ -24,7 +28,7 @@ build_exe_options = {
 
 setup(
     name="jc_render_app",
-    version="0.1.5",
+    version=version_exe,
     options={"build_exe": build_exe_options},
     executables=[
         Executable(

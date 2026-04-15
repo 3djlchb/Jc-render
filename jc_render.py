@@ -30,7 +30,8 @@ ICONO_ARCHIVO = "jc_render.ico"
 class JcRender(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JC Render - Batch Manager Pro")
+        version = self.version_compilado()
+        self.setWindowTitle(f"JC Render - Batch Manager Pro {version}")
         self.resize(1600, 900)
         
         # 1. CONTENIDO CENTRAL
@@ -45,6 +46,9 @@ class JcRender(QMainWindow):
         self._crear_acciones() # Creamos las acciones primero
         self._crear_menu()
         self._crear_barra_herramientas()
+
+    def version_compilado(self):
+        return "v-0.1.5"
 
     def _crear_acciones(self):
         """Define las acciones que se compartirán entre menú y barra de herramientas"""
