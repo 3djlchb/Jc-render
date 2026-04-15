@@ -24,7 +24,7 @@ build_exe_options = {
 
 setup(
     name="jc_render_app",
-    version="0.1.4",
+    version="0.1.5",
     options={"build_exe": build_exe_options},
     executables=[
         Executable(
