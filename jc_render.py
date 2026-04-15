@@ -48,7 +48,7 @@ class JcRender(QMainWindow):
         self._crear_barra_herramientas()
 
     def version_compilado(self):
-        return "v-0.1.5"
+        return "v- 0.1.5"
 
     def _crear_acciones(self):
         """Define las acciones que se compartirán entre menú y barra de herramientas"""
