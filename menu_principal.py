@@ -876,7 +876,7 @@ class MenuPrincipal(QWidget):
 
         nombre_file = t["nom"].strip() if t["nom"].strip() else os.path.splitext(os.path.basename(t["ruta"]))[0]
         nombre_file_2 = 'img'
-        path_salida_completo = os.path.join(ruta_final_folder, f"{nombre_file}_###")
+        path_salida_completo = os.path.join(ruta_final_folder, f"{nombre_file}_#####")
 
         # 3. SCRIPT PYTHON (Corregido con comillas triples para evitar SyntaxError)
         # 3. SCRIPT PYTHON (Optimizado para Blender 4.x/5.x)
