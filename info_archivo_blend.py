@@ -15,6 +15,9 @@ def format_blender_version(v_tuple):
     if major == 4 and minor == 5:
         return " 4.5.8 LTS"
     
+    if major == 5 and minor == 0:
+        return " 5.0.1"
+    
     if major == 5 and minor == 1:
         # En la serie 5.x, el tercer valor suele ser la build interna
         # Lo normalizamos a la versión comercial 5.1.1
