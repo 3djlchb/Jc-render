@@ -155,7 +155,6 @@ class MenuPrincipal(QWidget):
             "Nombre Out", "Formato", "Desde", "Hasta", "PROGRESO", "ACCIÓN"
         ])
 
-        self.tabla_renderizar.itemDoubleClicked.connect(self.abrir_con_blender_desde_tabla) # <--- AÑADIR ESTO
         # --- Para Tabla Renderizado ---
         self.tabla_renderizar.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tabla_renderizar.customContextMenuRequested.connect(self.mostrar_menu_contextual)
@@ -393,15 +392,9 @@ class MenuPrincipal(QWidget):
                 "version_blender": "Error ADN", 
                 "active_scene": "N/A"
             }
+        
     
     # --- FUNCIÓN: ELIMINAR PROYECTO ---
-    def mostrar_menu_contextual(self, pos):
-        menu = QMenu()
-        accion_eliminar = QAction("❌ Eliminar Proyecto de la lista", self)
-        accion_eliminar.triggered.connect(self.eliminar_proyecto_seleccionado)
-        menu.addAction(accion_eliminar)
-        menu.exec(self.tabla_metadatos.mapToGlobal(pos))
-
     def eliminar_proyecto_seleccionado(self):
         fila = self.tabla_metadatos.currentRow()
         if fila < 0: return

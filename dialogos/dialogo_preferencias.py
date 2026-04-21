@@ -6,18 +6,18 @@ import re
 import sys
 import zstandard as zstd
 
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QTabWidget, QWidget, 
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QTabWidget, QWidget, QMenu, 
                                QLineEdit, QPushButton, QFormLayout, QHBoxLayout, 
                                QMessageBox, QFileDialog, QTableWidget, QTableWidgetItem, 
                                QHeaderView, QLabel, QTextEdit)
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import (QColor, QAction)
 
 class PreferenciasDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Gestor Inteligente de Blender - Configuración Pro")
-        self.resize(1100, 850)
+        self.resize(1200, 850)
         
         # --- NORMALIZACIÓN DE RUTAS ---
         if getattr(sys, 'frozen', False):
@@ -343,7 +343,9 @@ class PreferenciasDialog(QDialog):
         
         self.tabla_exe = QTableWidget(); self.tabla_exe.setColumnCount(4)
         self.tabla_exe.setHorizontalHeaderLabels(["ID", "Ruta", "Versión Exacta", "Tipo"])
+        self.tabla_exe.setColumnWidth(0, 20)
         self.tabla_exe.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tabla_exe.setColumnWidth(2, 120)
         layout.addWidget(self.tabla_exe)
 
     def _setup_tab_blend(self, layout):
@@ -356,7 +358,12 @@ class PreferenciasDialog(QDialog):
         
         self.tabla_blend = QTableWidget(); self.tabla_blend.setColumnCount(4)
         self.tabla_blend.setHorizontalHeaderLabels(["ID", "Ruta del .blend", "Versión Sincronizada", "Modificación"])
+        self.tabla_blend.setColumnWidth(0, 20)
         self.tabla_blend.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tabla_blend.setColumnWidth(2, 120)
+
+        self.tabla_blend.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tabla_blend.customContextMenuRequested.connect(self.menu_contextual_tabla_blend)
         self.tabla_blend.itemDoubleClicked.connect(self.abrir_con_blender)
         layout.addWidget(self.tabla_blend)
         
@@ -368,6 +375,27 @@ class PreferenciasDialog(QDialog):
         if ruta: 
             line_edit.setText(ruta)
             self.ultima_ruta_explorada = os.path.dirname(ruta)
+
+
+    def menu_contextual_tabla_blend(self, pos):
+        tabla_activa = self.sender()
+        item = tabla_activa.itemAt(pos)
+        if not item: return
+        menu = QMenu()
+
+        '''
+        accion_abrir = QAction("🚀 Abrir en Blender", self)
+        accion_abrir.triggered.connect(lambda: self.abrir_con_blender(item))
+        menu.addAction(accion_abrir)
+
+        menu.addSeparator()
+        '''
+
+        accion_eliminar = QAction("❌ Eliminar proyecto", self)
+        accion_eliminar.triggered.connect(lambda: self.eliminar_registro(self.tabla_blend, "proyectos"))
+        menu.addAction(accion_eliminar)
+        menu.exec(self.tabla_blend.mapToGlobal(pos))
+
 
     def eliminar_registro(self, tabla, db_table):
         """
