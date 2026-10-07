@@ -1180,11 +1180,11 @@ class MenuPrincipal(QWidget):
             # 3. Actualizar la base de datos usando la RUTA como filtro único
             try:
                 conn = sqlite3.connect(self.db_path)
-                # Actualizamos la tabla metadatos vinculándola por la ruta en la tabla proyectos
+                # Save the detected version in proyectos using the file path
                 conn.execute("""
-                    UPDATE metadatos 
-                    SET version = ? 
-                    WHERE id_proyecto = (SELECT id FROM proyectos WHERE carpeta = ?)
+                    UPDATE proyectos
+                    SET blender_version = ?
+                    WHERE carpeta = ?
                 """, (version_detectada, ruta_abs))
                 conn.commit()
                 conn.close()

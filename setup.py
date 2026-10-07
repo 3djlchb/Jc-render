@@ -16,7 +16,7 @@ archivos_adicionales = [
 
 build_exe_options = {
     "include_files": archivos_adicionales,
-    "packages": ["os", "sys", "json", "sqlite3", "PySide6", "subprocess"],
+    "packages": ["os", "sys", "json", "sqlite3", "PySide6", "subprocess", "zstandard"],
     "include_msvcr": True,
     #ESTO ES CLAVE: Evita que las librerías se metan en un .zip interno
     # permitiendo que BASE_DIR funcione siempre.
