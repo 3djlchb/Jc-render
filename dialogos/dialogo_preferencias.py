@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QTabWidget, QWidget, QMenu,
                                QMessageBox, QFileDialog, QTableWidget, QTableWidgetItem, 
                                QHeaderView, QLabel, QTextEdit)
 from PySide6.QtCore import Qt
+from app_paths import get_database_path
 from PySide6.QtGui import (QColor, QAction)
 
 class PreferenciasDialog(QDialog):
@@ -19,15 +20,7 @@ class PreferenciasDialog(QDialog):
         self.setWindowTitle("Gestor Inteligente de Blender - Configuración Pro")
         self.resize(1200, 850)
         
-        # --- NORMALIZACIÓN DE RUTAS ---
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            actual_dir = os.path.dirname(os.path.abspath(__file__))
-            base_dir = os.path.dirname(actual_dir) 
-        
-        self.db_path = os.path.join(base_dir, 'bbdd', 'config.db').replace("\\", "/")
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.db_path = get_database_path()
         
         self._inicializar_bd()
         self.ultima_ruta_explorada = ""
